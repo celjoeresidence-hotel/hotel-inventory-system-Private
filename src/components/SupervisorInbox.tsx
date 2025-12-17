@@ -7,8 +7,9 @@ interface OperationalRecordRow {
   entity_type: 'front_desk' | 'kitchen' | 'bar' | 'storekeeper' | string;
   status: 'pending' | 'rejected' | 'approved' | string;
   data: any | null;
-  financial_amount: number;
   created_at: string | null;
+  original_id?: string | null;
+  submitted_by?: string | null;
 }
 
 function formatDate(iso: string | null | undefined) {
@@ -19,6 +20,13 @@ function formatDate(iso: string | null | undefined) {
     return iso ?? '—';
   }
 }
+
+const DEPARTMENT_LABEL: Record<string, string> = {
+  front_desk: 'Front Desk',
+  kitchen: 'Kitchen',
+  bar: 'Bar',
+  storekeeper: 'Storekeeper',
+};
 
 function Details({ record }: { record: OperationalRecordRow }) {
   const d: any = record.data ?? {};
@@ -31,6 +39,8 @@ function Details({ record }: { record: OperationalRecordRow }) {
           <h4>Guest Info</h4>
           <div>Full Name: {d?.guest?.full_name ?? '—'}</div>
           <div>Phone: {d?.guest?.phone ?? '—'}</div>
+          <div>Email: {d?.guest?.email ?? '—'}</div>
+          <div>ID Ref: {d?.guest?.id_reference ?? '—'}</div>
         </section>
         <section style={{ marginBottom: 12 }}>
           <h4>Stay Info</h4>
@@ -39,19 +49,6 @@ function Details({ record }: { record: OperationalRecordRow }) {
           <div>Check-out: {d?.stay?.check_out ?? '—'}</div>
           <div>Adults: {d?.stay?.adults ?? '—'}</div>
           <div>Children: {d?.stay?.children ?? '—'}</div>
-        </section>
-        <section style={{ marginBottom: 12 }}>
-          <h4>Pricing Breakdown</h4>
-          <div>Room Rate: {d?.pricing?.room_rate ?? '—'}</div>
-          <div>Nights: {d?.pricing?.nights ?? '—'}</div>
-          <div>Total Room Cost: {d?.pricing?.total_room_cost ?? '—'}</div>
-        </section>
-        <section style={{ marginBottom: 12 }}>
-          <h4>Payment Info</h4>
-          <div>Paid Amount: {d?.payment?.paid_amount ?? '—'}</div>
-          <div>Payment Method: {d?.payment?.payment_method ?? '—'}</div>
-          <div>Payment Reference: {d?.payment?.payment_reference ?? '—'}</div>
-          <div>Balance: {d?.payment?.balance ?? '—'}</div>
         </section>
         <section style={{ marginBottom: 12 }}>
           <h4>Notes</h4>
@@ -85,8 +82,6 @@ function Details({ record }: { record: OperationalRecordRow }) {
         <div>Opening: {d?.opening_stock ?? '—'}</div>
         <div>Restocked: {d?.restocked ?? '—'}</div>
         <div>Sold: {d?.sold ?? '—'}</div>
-        <div>Unit Price: {d?.unit_price ?? '—'}</div>
-        <div>Total Amount: {d?.total_amount ?? '—'}</div>
         <div>Closing: {d?.closing_stock ?? '—'}</div>
         <div>Notes: {d?.notes ?? '—'}</div>
         <div style={{ marginTop: 8 }}>Submitted: {formatDate(record.created_at)}</div>
@@ -119,6 +114,7 @@ function Details({ record }: { record: OperationalRecordRow }) {
 
 export default function SupervisorInbox() {
   const { session, role, isConfigured } = useAuth();
+  // removed: const [activeTab, setActiveTab] = useState<'approvals' | 'config'>('approvals');
   const [records, setRecords] = useState<OperationalRecordRow[]>([]);
   const [selected, setSelected] = useState<OperationalRecordRow | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -127,19 +123,57 @@ export default function SupervisorInbox() {
   const [rejectReason, setRejectReason] = useState<string>('');
   const [showReject, setShowReject] = useState<boolean>(false);
   const [successMessage, setSuccessMessage] = useState<string>('');
+  // Filters & drawer state
+  const [filterDept, setFilterDept] = useState<string>('all');
+  const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [fromDate, setFromDate] = useState<string>('');
+  const [toDate, setToDate] = useState<string>('');
+  const [showDrawer, setShowDrawer] = useState<boolean>(false);
+
+  const [profilesMap, setProfilesMap] = useState<Record<string, { full_name: string | null; role: string | null }>>({});
+
   const canUse = useMemo(() => Boolean(isConfigured && session && role === 'supervisor'), [isConfigured, session, role]);
+
+  // Entity type filter options derived from pending records
+  const typeOptions = useMemo(() => {
+    const s = new Set<string>();
+    for (const r of records) {
+      const t = (r as any)?.data?.type;
+      if (t) s.add(String(t));
+    }
+    return Array.from(s);
+  }, [records]);
+
+  // Apply type filter to the fetched records
+  const filteredRecords = useMemo(() => {
+    if (typeFilter === 'all') return records;
+    if (typeFilter === 'none') return records.filter((r) => !(r as any)?.data?.type);
+    return records.filter((r) => String((r as any)?.data?.type ?? '') === typeFilter);
+  }, [records, typeFilter]);
 
   useEffect(() => {
     async function fetchPending() {
       setError(null);
       setLoadingList(true);
       try {
-        if (!canUse || !supabase) return;
-        const { data, error } = await supabase
+        const sb = supabase;
+        if (!canUse || !sb) return;
+        let query = sb
           .from('operational_records')
-          .select('id, entity_type, status, data, financial_amount, created_at')
-          .eq('status', 'pending')
-          .order('created_at', { ascending: false });
+          .select('id, entity_type, status, data, created_at, original_id, submitted_by')
+          .eq('status', 'pending');
+        if (filterDept !== 'all') {
+          query = query.eq('entity_type', filterDept);
+        }
+        if (fromDate) {
+          const fromIso = new Date(fromDate).toISOString();
+          query = query.gte('created_at', fromIso);
+        }
+        if (toDate) {
+          const toIso = new Date(`${toDate}T23:59:59.999Z`).toISOString();
+          query = query.lte('created_at', toIso);
+        }
+        const { data, error } = await query.order('created_at', { ascending: false });
         if (error) {
           setError(error.message);
           return;
@@ -149,72 +183,301 @@ export default function SupervisorInbox() {
           entity_type: r?.entity_type,
           status: r?.status,
           data: r?.data ?? null,
-          financial_amount: r?.financial_amount ?? 0,
           created_at: r?.created_at ?? null,
+          original_id: r?.original_id ?? null,
+          submitted_by: r?.submitted_by ?? null,
         })) as OperationalRecordRow[];
         setRecords(safe);
+        const ids = Array.from(new Set(safe.map((r) => r.submitted_by).filter(Boolean))) as string[];
+        if (ids.length) {
+          const { data: profs, error: pErr } = await sb
+            .from('profiles')
+            .select('id, full_name, role')
+            .in('id', ids);
+          if (!pErr && profs) {
+            const map: Record<string, { full_name: string | null; role: string | null }> = {};
+            for (const p of profs as any[]) {
+              map[p.id] = { full_name: p.full_name ?? null, role: p.role ?? null };
+            }
+            setProfilesMap(map);
+          }
+        }
       } finally {
         setLoadingList(false);
       }
     }
     fetchPending();
-  }, [canUse]);
+  }, [canUse, filterDept, fromDate, toDate]);
 
-  const groups = useMemo(() => {
-    const byType: Record<string, OperationalRecordRow[]> = {};
-    for (const r of records) {
-      const key = r.entity_type ?? 'unknown';
-      if (!byType[key]) byType[key] = [];
-      byType[key].push(r);
+  const groupsByOriginal = useMemo(() => {
+    const byOrig: Record<string, OperationalRecordRow[]> = {};
+    for (const r of filteredRecords) {
+      const key = (r.original_id ?? r.id) as string;
+      if (!byOrig[key]) byOrig[key] = [];
+      byOrig[key].push(r);
     }
-    return byType;
-  }, [records]);
+    return byOrig;
+  }, [filteredRecords]);
 
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  function toggleGroup(key: string) {
-    setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
-  }
+  const orderedGroupKeys = useMemo(() => Object.keys(groupsByOriginal).sort((a, b) => {
+    const ra = groupsByOriginal[a]?.[0];
+    const rb = groupsByOriginal[b]?.[0];
+    return (rb?.created_at ? new Date(rb.created_at).getTime() : 0) - (ra?.created_at ? new Date(ra.created_at).getTime() : 0);
+  }), [groupsByOriginal]);
 
-  async function approve(record: OperationalRecordRow) {
-    if (!canUse || !supabase) return;
+  // removed: collapsed state
+  // removed: const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // removed: function toggleGroup(key: string) {
+  //   setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
+  // }
+
+  async function approveGroup(originalId: string) {
+    const sb = supabase;
+    if (!canUse || !sb) return;
     setError(null);
     setSuccessMessage('');
     setActionLoading(true);
     try {
-      const { error } = await supabase.rpc('api.approve_record', { id: record.id });
-      if (error) {
-        setError(error.message);
-        return;
+      const group = groupsByOriginal[originalId] || [];
+      for (const rec of group) {
+        const { error } = await sb.rpc('approve_record', { _id: rec.id });
+        if (error) {
+          setError(error.message);
+          return;
+        }
       }
-      setRecords((prev) => prev.filter((r) => r.id !== record.id));
+      setRecords((prev) => prev.filter((r) => (r.original_id ?? r.id) !== originalId));
       setSelected(null);
       setShowReject(false);
-      setSuccessMessage('Record approved successfully.');
+      setSuccessMessage('Record(s) approved successfully.');
     } finally {
       setActionLoading(false);
     }
   }
 
-  async function reject(record: OperationalRecordRow) {
-    if (!canUse || !supabase) return;
+  async function rejectGroup(originalId: string) {
+    const sb = supabase;
+    if (!canUse || !sb) return;
     setError(null);
     setSuccessMessage('');
     setActionLoading(true);
     try {
-      const reason = rejectReason.trim() || null;
-      const { error } = await supabase.rpc('api.reject_record', { _id: record.id, _reason: reason });
-      if (error) {
-        setError(error.message);
+      const reason = rejectReason.trim();
+      if (!reason) {
+        setError('Rejection requires a non-empty reason.');
         return;
       }
-      setRecords((prev) => prev.filter((r) => r.id !== record.id));
+      const group = groupsByOriginal[originalId] || [];
+      for (const rec of group) {
+        const { error } = await sb.rpc('reject_record', { _id: rec.id, _reason: reason });
+        if (error) {
+          setError(error.message);
+          return;
+        }
+      }
+      setRecords((prev) => prev.filter((r) => (r.original_id ?? r.id) !== originalId));
       setSelected(null);
       setRejectReason('');
       setShowReject(false);
-      setSuccessMessage('Record rejected successfully.');
+      setSuccessMessage('Record(s) rejected successfully.');
     } finally {
       setActionLoading(false);
     }
+  }
+
+  // Configuration Tab State
+  // const [category, setCategory] = useState<'food' | 'drink' | 'provision'>('food');
+  // const [collectionName, setCollectionName] = useState<string>('');
+  // const [itemName, setItemName] = useState<string>('');
+  // const [openingQty, setOpeningQty] = useState<number>(0);
+  // const [restockQty, setRestockQty] = useState<number>(0);
+  // const [restockDate, setRestockDate] = useState<string>('');
+  // const [cfgMsg, setCfgMsg] = useState<string>('');
+  // const [cfgErr, setCfgErr] = useState<string>('');
+  // const [cfgLoading, setCfgLoading] = useState<boolean>(false);
+
+  // async function insertAndApproveStorekeeper(data: any) {
+  //   setCfgErr('');
+  //   setCfgMsg('');
+  //   setCfgLoading(true);
+  //   try {
+  //     const sb = supabase;
+  //     if (!sb) {
+  //       setCfgErr('Supabase is not configured.');
+  //       return;
+  //     }
+  //     const { data: inserted, error: insErr } = await sb
+  //       .from('operational_records')
+  //       .insert({ entity_type: 'storekeeper', data, financial_amount: 0 })
+  //       .select()
+  //       .single();
+  //     if (insErr) {
+  //       setCfgErr(insErr.message);
+  //       return;
+  //     }
+  //     const id = (inserted as any)?.id;
+  //     if (!id) {
+  //       setCfgErr('Failed to insert configuration record.');
+  //       return;
+  //     }
+  //     const { error: aprErr } = await sb.rpc('approve_record', { _id: id });
+  //     if (aprErr) {
+  //       setCfgErr(aprErr.message);
+  //       return;
+  //     }
+  //     setCfgMsg('Saved successfully.');
+  //     setCollectionName('');
+  //     setItemName('');
+  //     setOpeningQty(0);
+  //     setRestockQty(0);
+  //     setRestockDate('');
+  //   } finally {
+  //     setCfgLoading(false);
+  //   }
+  // }
+
+  function ApprovalsTab() {
+    const noRecords = orderedGroupKeys.length === 0;
+    return (
+      <div>
+        {error && (
+          <div style={{ background: '#ffe5e5', color: '#900', padding: '8px 12px', borderRadius: 6, marginTop: 8 }}>
+            {error}
+          </div>
+        )}
+        {successMessage && (
+          <div style={{ background: '#e6ffed', color: '#0a7f3b', padding: '8px 12px', borderRadius: 6, marginTop: 8 }}>
+            {successMessage}
+          </div>
+        )}
+        {/* Filters */}
+        <div style={{ background: '#fff', border: '1px solid #ddd', borderRadius: 8, padding: 16, marginTop: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: 6 }}>Department</label>
+              <select value={filterDept} onChange={(e) => setFilterDept(e.target.value)} style={{ width: '100%', padding: '8px 10px' }}>
+                <option value="all">All</option>
+                <option value="front_desk">Front Desk</option>
+                <option value="kitchen">Kitchen</option>
+                <option value="bar">Bar</option>
+                <option value="storekeeper">Storekeeper</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 6 }}>Entity type</label>
+              <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ width: '100%', padding: '8px 10px' }}>
+                <option value="all">All</option>
+                <option value="none">None</option>
+                {typeOptions.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 6 }}>From date</label>
+              <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} style={{ width: '100%', padding: '8px 10px' }} />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 6 }}>To date</label>
+              <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} style={{ width: '100%', padding: '8px 10px' }} />
+            </div>
+          </div>
+        </div>
+        {loadingList ? (
+          <div className="table-loading">Loading records...</div>
+        ) : noRecords ? (
+          <div style={{ color: '#666', marginTop: 12 }}>No pending records.</div>
+        ) : (
+          <div style={{ background: '#fff', border: '1px solid #ddd', borderRadius: 8 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Entity</th>
+                  <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Department</th>
+                  <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Submitted by</th>
+                  <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Submission date</th>
+                  <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: 8 }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orderedGroupKeys.map((orig) => {
+                  const group = groupsByOriginal[orig] || [];
+                  const first = group[0];
+                  const submittedName = first?.submitted_by ? (profilesMap[first.submitted_by]?.full_name ?? '—') : '—';
+                  const department = DEPARTMENT_LABEL[first?.entity_type ?? ''] ?? first?.entity_type ?? '—';
+                  return (
+                    <tr key={orig}>
+                      <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{first?.entity_type}</td>
+                      <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{department}</td>
+                      <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{submittedName}</td>
+                      <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{formatDate(first?.created_at)}</td>
+                      <td style={{ borderBottom: '1px solid #eee', padding: 8, textAlign: 'right' }}>
+                        <button
+                          className="btn"
+                          style={{ background: '#eee', color: '#333', padding: '6px 10px', borderRadius: 6, marginRight: 8 }}
+                          onClick={() => { setSelected(first ?? null); setShowDrawer(true); }}
+                          disabled={actionLoading}
+                        >
+                          Details
+                        </button>
+                        <button
+                          className="btn"
+                          style={{ background: '#1B5E20', color: '#fff', padding: '6px 10px', borderRadius: 6, marginRight: 8 }}
+                          onClick={() => approveGroup(orig)}
+                          disabled={actionLoading}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          className="btn"
+                          style={{ background: '#eee', color: '#333', padding: '6px 10px', borderRadius: 6 }}
+                          onClick={() => { setSelected(first ?? null); setShowReject(true); }}
+                          disabled={actionLoading}
+                        >
+                          Reject
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Side drawer details */}
+        {showDrawer && selected && (
+          <div style={{ position: 'fixed', top: 0, right: 0, height: '100vh', width: 420, background: '#fff', boxShadow: '-2px 0 12px rgba(0,0,0,0.1)', zIndex: 1000, display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid #eee' }}>
+              <h3 style={{ margin: 0 }}>Record Details</h3>
+              <button className="btn" onClick={() => setShowDrawer(false)} style={{ background: '#eee', color: '#333' }}>Close</button>
+            </div>
+            <div style={{ padding: 16, overflowY: 'auto' }}>
+              <Details record={selected} />
+            </div>
+          </div>
+        )}
+
+        {showReject && selected && (
+          <div className="modal-backdrop">
+            <div style={{ background: '#fff', padding: 16, borderRadius: 8, width: 480, maxWidth: '90vw' }}>
+              <h3 style={{ marginTop: 0 }}>Reject Submission</h3>
+              <p style={{ color: '#555' }}>Provide a reason for rejection. This is required.</p>
+              <textarea
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                rows={3}
+                style={{ width: '100%', padding: '8px 10px' }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+                <button className="btn" onClick={() => { setShowReject(false); setRejectReason(''); }} style={{ background: '#eee', color: '#333', padding: '6px 10px', borderRadius: 6 }}>Cancel</button>
+                <button className="btn" onClick={() => rejectGroup(selected.original_id ?? selected.id)} style={{ background: '#1B5E20', color: '#fff', padding: '6px 10px', borderRadius: 6 }} disabled={actionLoading}>Confirm Reject</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
   }
 
   if (!canUse) {
@@ -226,173 +489,10 @@ export default function SupervisorInbox() {
     );
   }
 
-  const orderedGroupKeys = ['front_desk', 'kitchen', 'bar', 'storekeeper'].filter((k) => groups[k]?.length);
-  const noRecords = orderedGroupKeys.length === 0;
-
   return (
-    <div style={{ padding: 16 }}>
-      <h2>Supervisor Approval Inbox</h2>
-      {error && (
-        <div style={{ background: '#ffe5e5', color: '#900', padding: '8px 12px', borderRadius: 6, marginTop: 8 }}>
-          {error}
-        </div>
-      )}
-      {successMessage && (
-        <div style={{ background: '#e6ffed', color: '#0a7f3b', padding: '8px 12px', borderRadius: 6, marginTop: 8 }}>
-          {successMessage}
-        </div>
-      )}
-      {loadingList ? (
-        <div>Loading records...</div>
-      ) : noRecords ? (
-        <div style={{ color: '#666', marginTop: 12 }}>No pending records.</div>
-      ) : (
-        <div style={{ display: 'grid', gap: 16 }}>
-          {orderedGroupKeys.map((key) => (
-            <div key={key} style={{ border: '1px solid #ddd', borderRadius: 8 }}>
-              <div
-                onClick={() => toggleGroup(key)}
-                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 12, cursor: 'pointer', background: '#f7f7f7' }}
-              >
-                <strong style={{ textTransform: 'capitalize' }}>{key.replace('_', ' ')}</strong>
-                <span style={{ color: '#555' }}>Pending: {groups[key]?.length ?? 0}</span>
-              </div>
-              {!collapsed[key] && (
-                <div style={{ padding: 12 }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                    <thead>
-                      {key === 'front_desk' && (
-                        <tr>
-                          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Guest</th>
-                          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Room</th>
-                          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Check-in</th>
-                          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Check-out</th>
-                          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Submitted</th>
-                        </tr>
-                      )}
-                      {key === 'kitchen' && (
-                        <tr>
-                          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Item</th>
-                          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Date</th>
-                          <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: 8 }}>Opening</th>
-                          <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: 8 }}>Restocked</th>
-                          <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: 8 }}>Sold</th>
-                          <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: 8 }}>Closing</th>
-                          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Submitted</th>
-                        </tr>
-                      )}
-                      {key === 'bar' && (
-                        <tr>
-                          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Item</th>
-                          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Date</th>
-                          <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: 8 }}>Sold</th>
-                          <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: 8 }}>Unit Price</th>
-                          <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: 8 }}>Total Amount</th>
-                          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Submitted</th>
-                        </tr>
-                      )}
-                      {key === 'storekeeper' && (
-                        <tr>
-                          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Item</th>
-                          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Date</th>
-                          <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: 8 }}>Opening</th>
-                          <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: 8 }}>Restocked</th>
-                          <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: 8 }}>Issued</th>
-                          <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: 8 }}>Closing</th>
-                          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Submitted</th>
-                        </tr>
-                      )}
-                    </thead>
-                    <tbody>
-                      {groups[key]!.map((r) => (
-                        <tr key={r.id} style={{ cursor: 'pointer' }} onClick={() => setSelected(r)}>
-                          {key === 'front_desk' && (
-                            <>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{r.data?.guest?.full_name ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{r.data?.stay?.room_id ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{r.data?.stay?.check_in ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{r.data?.stay?.check_out ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{formatDate(r.created_at)}</td>
-                            </>
-                          )}
-                          {key === 'kitchen' && (
-                            <>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{r.data?.item_name ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{r.data?.date ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8, textAlign: 'right' }}>{r.data?.opening_stock ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8, textAlign: 'right' }}>{r.data?.restocked ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8, textAlign: 'right' }}>{r.data?.sold ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8, textAlign: 'right' }}>{r.data?.closing_stock ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{formatDate(r.created_at)}</td>
-                            </>
-                          )}
-                          {key === 'bar' && (
-                            <>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{r.data?.item_name ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{r.data?.date ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8, textAlign: 'right' }}>{r.data?.sold ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8, textAlign: 'right' }}>{r.data?.unit_price ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8, textAlign: 'right' }}>{r.data?.total_amount ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{formatDate(r.created_at)}</td>
-                            </>
-                          )}
-                          {key === 'storekeeper' && (
-                            <>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{r.data?.item_name ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{r.data?.date ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8, textAlign: 'right' }}>{r.data?.opening_stock ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8, textAlign: 'right' }}>{r.data?.restocked ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8, textAlign: 'right' }}>{r.data?.issued ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8, textAlign: 'right' }}>{r.data?.closing_stock ?? '—'}</td>
-                              <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{formatDate(r.created_at)}</td>
-                            </>
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div style={{ marginTop: 16 }}>
-        <h2>Details</h2>
-        {!selected ? (
-          <div style={{ color: '#666' }}>Select a record to view details.</div>
-        ) : (
-          <div>
-            <Details record={selected} />
-            <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-              <button onClick={() => approve(selected!)} disabled={actionLoading}>
-                {actionLoading ? 'Working...' : 'Approve'}
-              </button>
-              <button onClick={() => setShowReject(true)} disabled={actionLoading}>
-                Reject
-              </button>
-            </div>
-            {showReject && (
-              <div style={{ marginTop: 12 }}>
-                <label style={{ display: 'block', marginBottom: 8 }}>Rejection Reason (optional)</label>
-                <textarea
-                  value={rejectReason}
-                  onChange={(e) => setRejectReason(e.target.value)}
-                  rows={3}
-                  style={{ width: '100%' }}
-                  placeholder="Optionally provide a reason"
-                />
-                <div style={{ marginTop: 8 }}>
-                  <button onClick={() => reject(selected!)} disabled={actionLoading}>
-                    {actionLoading ? 'Working...' : 'Submit Rejection'}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+    <div style={{ padding: 16, fontFamily: 'Montserrat, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, sans-serif', background: '#fff' }}>
+      <h2 style={{ marginTop: 0 }}>Pending Approvals</h2>
+      <ApprovalsTab />
     </div>
   );
 }

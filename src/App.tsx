@@ -4,9 +4,26 @@ import Login from './components/Login'
 import AppShell from './components/AppShell'
 
 function Root() {
-  const { session, loading } = useAuth();
+  const { session, loading, staffId, profileError } = useAuth();
   if (loading) {
-    return <div style={{ padding: 24 }}>Loading...</div>;
+    return (
+      <div className="app-loading">
+        <div className="spinner" aria-label="Loading" />
+        <div className="loading-text">Loading...</div>
+      </div>
+    );
+  }
+  if (session && !staffId) {
+    return (
+      <div className="blocking-error">
+        <h2>Staff profile not found. Contact administrator.</h2>
+        {profileError && (
+          <div className="error-box" style={{ marginTop: 12 }}>
+            {profileError}
+          </div>
+        )}
+      </div>
+    );
   }
   return session ? <AppShell /> : <Login />;
 }

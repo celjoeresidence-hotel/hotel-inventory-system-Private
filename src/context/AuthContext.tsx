@@ -8,45 +8,40 @@ interface AuthContextValue {
   session: Session | null;
   user: User | null;
   role: AppRole;
+  staffId: string | null;
+  department: string | null;
+  fullName: string | null;
+  isAdmin: boolean;
+  isManager: boolean;
+  isSupervisor: boolean;
   loading: boolean;
   login: (email: string, password: string) => Promise<{ ok: boolean; message?: string }>;
   logout: () => Promise<void>;
   isConfigured: boolean;
+  profileError?: string | null;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-async function fetchUserRole(userId: string): Promise<AppRole> {
-  if (!supabase) return null;
+async function fetchStaffProfile(userId: string) {
+  if (!supabase) return { data: null, error: { message: 'Supabase not configured' } } as const;
   const { data, error } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', userId)
+    .from('staff_profiles')
+    .select('id, role, department, full_name, is_active')
+    .eq('user_id', userId)
     .maybeSingle();
-  if (error) {
-    console.error('Failed to fetch user role:', error.message);
-    return null;
-  }
-  const role = (data?.role as AppRole) ?? null;
-  if (
-    role !== 'front_desk' &&
-    role !== 'supervisor' &&
-    role !== 'manager' &&
-    role !== 'admin' &&
-    role !== 'kitchen' &&
-    role !== 'bar' &&
-    role !== 'storekeeper'
-  ) {
-    return null;
-  }
-  return role;
+  return { data, error } as const;
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<AppRole>(null);
+  const [staffId, setStaffId] = useState<string | null>(null);
+  const [department, setDepartment] = useState<string | null>(null);
+  const [fullName, setFullName] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [profileError, setProfileError] = useState<string | null>(null);
 
   const isConfigured = useMemo(() => Boolean(isSupabaseConfigured && supabase), []);
 
@@ -67,23 +62,60 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (mounted) {
         setSession(s);
         setUser(s?.user ?? null);
-        setLoading(false);
       }
       if (s?.user) {
-        const fetchedRole = await fetchUserRole(s.user.id);
-        if (mounted) setRole(fetchedRole);
+        const { data: profile, error: pfErr } = await fetchStaffProfile(s.user.id);
+        if (mounted) {
+          if (pfErr) {
+            console.warn('Profile fetch error:', pfErr.message);
+            setProfileError(pfErr.message || 'Failed to fetch staff profile');
+          } else if (!profile) {
+            setProfileError('No staff profile row found for this user.');
+          } else {
+            setProfileError(null);
+          }
+          const fetchedRole = (profile?.role as AppRole) ?? null;
+          setRole(fetchedRole);
+          setStaffId(profile?.id ?? null);
+          setDepartment(profile?.department ?? null);
+          setFullName(profile?.full_name ?? null);
+        }
       } else {
-        if (mounted) setRole(null);
+        if (mounted) {
+          setRole(null);
+          setStaffId(null);
+          setDepartment(null);
+          setFullName(null);
+          setProfileError(null);
+        }
       }
+      if (mounted) setLoading(false);
+
       const { data: sub } = supabase!.auth.onAuthStateChange(async (_event, newSession) => {
         if (!mounted) return;
         setSession(newSession);
         setUser(newSession?.user ?? null);
         if (newSession?.user) {
-          const fetchedRole = await fetchUserRole(newSession.user.id);
+          const { data: profile, error: pfErr } = await fetchStaffProfile(newSession.user.id);
+          if (pfErr) {
+            console.warn('Profile fetch error:', pfErr.message);
+            setProfileError(pfErr.message || 'Failed to fetch staff profile');
+          } else if (!profile) {
+            setProfileError('No staff profile row found for this user.');
+          } else {
+            setProfileError(null);
+          }
+          const fetchedRole = (profile?.role as AppRole) ?? null;
           setRole(fetchedRole);
+          setStaffId(profile?.id ?? null);
+          setDepartment(profile?.department ?? null);
+          setFullName(profile?.full_name ?? null);
         } else {
           setRole(null);
+          setStaffId(null);
+          setDepartment(null);
+          setFullName(null);
+          setProfileError(null);
         }
       });
       unsubscribe = sub?.subscription?.unsubscribe?.bind(sub.subscription) ?? null;
@@ -105,8 +137,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSession(newSession);
     setUser(newSession?.user ?? null);
     if (newSession?.user) {
-      const fetchedRole = await fetchUserRole(newSession.user.id);
+      const { data: profile, error: pfErr } = await fetchStaffProfile(newSession.user.id);
+      if (pfErr) {
+        console.warn('Profile fetch error:', pfErr.message);
+        setProfileError(pfErr.message || 'Failed to fetch staff profile');
+      } else if (!profile) {
+        setProfileError('No staff profile row found for this user.');
+      } else {
+        setProfileError(null);
+      }
+      const fetchedRole = (profile?.role as AppRole) ?? null;
       setRole(fetchedRole);
+      setStaffId(profile?.id ?? null);
+      setDepartment(profile?.department ?? null);
+      setFullName(profile?.full_name ?? null);
+    } else {
+      setRole(null);
+      setStaffId(null);
+      setDepartment(null);
+      setFullName(null);
+      setProfileError(null);
     }
     return { ok: true };
   }
@@ -124,16 +174,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSession(null);
     setUser(null);
     setRole(null);
+    setStaffId(null);
+    setDepartment(null);
+    setFullName(null);
+    setProfileError(null);
   }
+
+  const isAdmin = role === 'admin';
+  const isManager = role === 'manager';
+  const isSupervisor = role === 'supervisor';
 
   const value: AuthContextValue = {
     session,
     user,
     role,
+    staffId,
+    department,
+    fullName,
+    isAdmin,
+    isManager,
+    isSupervisor,
     loading,
     login,
     logout,
     isConfigured,
+    profileError,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

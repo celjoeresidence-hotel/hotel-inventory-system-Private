@@ -2,17 +2,7 @@ import { useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
-interface BarStockData {
-  date: string;
-  item_name: string;
-  opening_stock: number;
-  restocked: number;
-  sold: number;
-  closing_stock: number;
-  unit_price: number;
-  total_amount: number;
-  notes?: string;
-}
+import type { BarStockData } from '../types/bar';
 
 export default function BarStockForm() {
   const { role, session, isConfigured } = useAuth();
@@ -103,7 +93,7 @@ export default function BarStockForm() {
         total_amount: Number(totalAmount) || 0,
         notes: notes?.trim() ? notes.trim() : undefined,
       },
-      financial_amount: Number(totalAmount) || 0,
+      financial_amount: 0,
     };
 
     try {

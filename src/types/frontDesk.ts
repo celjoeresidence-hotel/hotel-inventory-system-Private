@@ -1,8 +1,11 @@
-export type PaymentMethod = 'transfer' | 'POS';
+export type PaymentMethod = 'transfer' | 'POS'
+export type PaymentType = 'full' | 'part'
 
 export interface GuestInfo {
   full_name: string;
   phone: string;
+  email?: string;
+  id_reference?: string;
 }
 
 export interface StayInfo {
@@ -22,6 +25,8 @@ export interface PricingInfo {
 export interface PaymentInfo {
   paid_amount: number;
   payment_method: PaymentMethod;
+  payment_type: PaymentType;
+  payment_date: string; // ISO date string
   payment_reference: string | null;
   balance: number;
 }
@@ -31,7 +36,11 @@ export interface MetaInfo {
   created_at_local: string; // ISO datetime string
 }
 
+export type FrontDeskRecordType = 'room_booking'
+
 export interface FrontDeskRecordData {
+  type: FrontDeskRecordType;
+  front_desk_staff_id: string;
   guest: GuestInfo;
   stay: StayInfo;
   pricing: PricingInfo;

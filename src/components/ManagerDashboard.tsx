@@ -87,28 +87,26 @@ export default function ManagerDashboard() {
 
   // Daily summary
   const roomsRevenueToday = useMemo(
-    () => rowsApprovedToday.filter((r) => r.entity_type === 'front_desk').reduce((sum, r) => sum + (Number(r.financial_amount ?? 0) || 0), 0),
+    () =>
+      rowsApprovedToday
+        .filter((r) => r.entity_type === 'front_desk' && (r.data?.type === 'room_booking' || r.data?.record_type === 'room_booking'))
+        .reduce((sum, r) => sum + (Number(r.financial_amount ?? 0) || 0), 0),
     [rowsApprovedToday]
   );
-  const barRevenueToday = useMemo(
-    () => rowsApprovedToday.filter((r) => r.entity_type === 'bar').reduce((sum, r) => sum + (Number(r.financial_amount ?? 0) || 0), 0),
-    [rowsApprovedToday]
-  );
+  const barCountToday = useMemo(() => rowsApprovedToday.filter((r) => r.entity_type === 'bar').length, [rowsApprovedToday]);
   const kitchenCountToday = useMemo(() => rowsApprovedToday.filter((r) => r.entity_type === 'kitchen').length, [rowsApprovedToday]);
   const storekeeperCountToday = useMemo(() => rowsApprovedToday.filter((r) => r.entity_type === 'storekeeper').length, [rowsApprovedToday]);
 
   // Monthly aggregation
   const roomsMonthlyRevenue = useMemo(
-    () => rowsApprovedThisMonth.filter((r) => r.entity_type === 'front_desk').reduce((sum, r) => sum + (Number(r.financial_amount ?? 0) || 0), 0),
+    () =>
+      rowsApprovedThisMonth
+        .filter((r) => r.entity_type === 'front_desk' && (r.data?.type === 'room_booking' || r.data?.record_type === 'room_booking'))
+        .reduce((sum, r) => sum + (Number(r.financial_amount ?? 0) || 0), 0),
     [rowsApprovedThisMonth]
   );
-  const barMonthlyRevenue = useMemo(
-    () => rowsApprovedThisMonth.filter((r) => r.entity_type === 'bar').reduce((sum, r) => sum + (Number(r.financial_amount ?? 0) || 0), 0),
-    [rowsApprovedThisMonth]
-  );
-  const monthlyRevenueTotal = roomsMonthlyRevenue + barMonthlyRevenue;
-  const roomsMonthlyPct = monthlyRevenueTotal > 0 ? (roomsMonthlyRevenue / monthlyRevenueTotal) * 100 : 0;
-  const barMonthlyPct = monthlyRevenueTotal > 0 ? (barMonthlyRevenue / monthlyRevenueTotal) * 100 : 0;
+  const barCountMonth = useMemo(() => rowsApprovedThisMonth.filter((r) => r.entity_type === 'bar').length, [rowsApprovedThisMonth]);
+  // Rooms revenue is the only financial metric tracked monthly; bar shows approvals count.
 
   if (role !== 'manager') {
     return (
@@ -137,8 +135,8 @@ export default function ManagerDashboard() {
           <div style={{ fontSize: 20, fontWeight: 600 }}>{formatCurrency(roomsRevenueToday)}</div>
         </div>
         <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 12, minWidth: 220 }}>
-          <div style={{ color: '#666' }}>Bar Revenue (Today)</div>
-          <div style={{ fontSize: 20, fontWeight: 600 }}>{formatCurrency(barRevenueToday)}</div>
+          <div style={{ color: '#666' }}>Bar Approvals (Today)</div>
+          <div style={{ fontSize: 20, fontWeight: 600 }}>{barCountToday}</div>
         </div>
         <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 12, minWidth: 220 }}>
           <div style={{ color: '#666' }}>Kitchen Approvals (Today)</div>
@@ -156,12 +154,10 @@ export default function ManagerDashboard() {
         <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 12, minWidth: 220 }}>
           <div style={{ color: '#666' }}>Rooms Revenue (Month)</div>
           <div style={{ fontSize: 20, fontWeight: 600 }}>{formatCurrency(roomsMonthlyRevenue)}</div>
-          <div style={{ color: '#666', fontSize: 12 }}>{roomsMonthlyPct.toFixed(1)}% of total</div>
         </div>
         <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 12, minWidth: 220 }}>
-          <div style={{ color: '#666' }}>Bar Revenue (Month)</div>
-          <div style={{ fontSize: 20, fontWeight: 600 }}>{formatCurrency(barMonthlyRevenue)}</div>
-          <div style={{ color: '#666', fontSize: 12 }}>{barMonthlyPct.toFixed(1)}% of total</div>
+          <div style={{ color: '#666' }}>Bar Approvals (Month)</div>
+          <div style={{ fontSize: 20, fontWeight: 600 }}>{barCountMonth}</div>
         </div>
         <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 12, minWidth: 220 }}>
           <div style={{ color: '#666' }}>Total Approved Records (Month)</div>

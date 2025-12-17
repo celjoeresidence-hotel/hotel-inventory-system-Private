@@ -2,15 +2,7 @@ import { useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
-interface KitchenStockData {
-  date: string;
-  item_name: string;
-  opening_stock: number;
-  restocked: number;
-  sold: number;
-  closing_stock: number;
-  notes?: string;
-}
+import type { KitchenStockData } from '../types/kitchen';
 
 export default function KitchenStockForm() {
   const { role, session, isConfigured } = useAuth();

@@ -2,17 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
-interface BookingPayload {
-  type: 'room_booking';
-  room_id: string;
-  start_date: string; // ISO date
-  end_date: string;   // ISO date
-  nights: number;
-  rate_per_night: number;
-  total_cost: number;
-  notes?: string;
-}
-
 interface RoomOption {
   id: string;
   room_number: string;
@@ -25,7 +14,7 @@ export default function RoomBookingForm() {
   const [roomId, setRoomId] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [ratePerNight, setRatePerNight] = useState<string>('');
+  const [ratePerNight, setRatePerNight] = useState<number>(0);
   const [notes, setNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -45,9 +34,8 @@ export default function RoomBookingForm() {
   }, [startDate, endDate]);
 
   const totalCost = useMemo(() => {
-    const rate = parseFloat(ratePerNight);
-    if (isNaN(rate) || rate <= 0 || nights <= 0) return 0;
-    return parseFloat((rate * nights).toFixed(2));
+    if (ratePerNight <= 0 || nights <= 0) return 0;
+    return Number((ratePerNight * nights).toFixed(2));
   }, [ratePerNight, nights]);
 
   useEffect(() => {
@@ -85,7 +73,7 @@ export default function RoomBookingForm() {
   function validate(): string | null {
     if (!session || !isConfigured || !supabase) return 'You must be logged in.';
     if (roomsLoading) return 'Rooms are still loading, please wait.';
-    if (!rooms || rooms.length === 0) return 'No rooms are available. Please contact an administrator.';
+    if (!rooms || rooms.length === 0) return 'No active rooms available';
     if (!roomId.trim()) return 'Room selection is required.';
     if (!startDate) return 'Start date is required.';
     if (!endDate) return 'End date is required.';
@@ -93,8 +81,7 @@ export default function RoomBookingForm() {
     const e = new Date(endDate);
     if (isNaN(s.getTime()) || isNaN(e.getTime())) return 'Invalid dates.';
     if (e <= s) return 'End date must be after start date.';
-    const rate = parseFloat(ratePerNight);
-    if (isNaN(rate) || rate <= 0) return 'Rate per night must be a positive number.';
+    if (ratePerNight <= 0) return 'Rate per night must be a positive number.';
     if (nights <= 0) return 'Nights must be positive.';
     if (totalCost <= 0) return 'Total cost must be positive.';
     return null;
@@ -119,7 +106,7 @@ export default function RoomBookingForm() {
         start_date: startDate,
         end_date: endDate,
         nights,
-        rate_per_night: parseFloat(ratePerNight),
+        rate_per_night: ratePerNight,
         total_cost: totalCost,
         notes: notes.trim() || undefined,
       };
@@ -139,14 +126,13 @@ export default function RoomBookingForm() {
         return;
       }
 
-      setSuccess('Booking recorded successfully.');
+      setSuccess('Booking submitted for supervisor approval.');
       // reset form
       setRoomId('');
       // reset auto rate
-      setRatePerNight('');
+      setRatePerNight(0);
       setStartDate('');
       setEndDate('');
-      setRatePerNight('');
       setNotes('');
     } finally {
       setSubmitting(false);
@@ -231,13 +217,13 @@ export default function RoomBookingForm() {
               setRoomId(newId);
               const r = rooms.find((x) => x.id === newId);
               if (r) {
-                setRatePerNight(String(r.price_per_night));
+                setRatePerNight(Number(r.price_per_night));
               } else {
-                setRatePerNight('');
+                setRatePerNight(0);
               }
-            }}
+             }}
             style={{ width: '100%', padding: 8 }}
-            disabled={!rooms || rooms.length === 0}
+            disabled={roomsLoading || !rooms || rooms.length === 0}
           >
             <option value="">Select a room</option>
             {rooms.map((room) => (
@@ -248,9 +234,9 @@ export default function RoomBookingForm() {
           </select>
         )}
         {!roomsLoading && rooms.length === 0 && (
-          <div style={{ color: '#900', marginTop: 4 }}>No rooms are available. Please contact an administrator.</div>
+          <div style={{ color: '#900', marginTop: 4 }}>No active rooms available</div>
         )}
-      </div>
+       </div>
 
       <div style={{ marginBottom: 12 }}>
         <label>Notes (optional)</label>
@@ -258,7 +244,7 @@ export default function RoomBookingForm() {
       </div>
 
       <button type="submit" disabled={submitting}>
-        {submitting ? 'Submitting...' : 'Submit Booking'}
+        {submitting ? 'Submitting...' : 'Submit for Approval'}
       </button>
     </form>
   );

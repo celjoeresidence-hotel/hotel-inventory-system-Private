@@ -2,15 +2,7 @@ import { useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
-interface StorekeeperStockData {
-  date: string;
-  item_name: string;
-  opening_stock: number;
-  restocked: number;
-  issued: number;
-  closing_stock: number;
-  notes?: string;
-}
+import type { StorekeeperStockData } from '../types/storekeeper';
 
 export default function StorekeeperStockForm() {
   const { role, session, isConfigured } = useAuth();

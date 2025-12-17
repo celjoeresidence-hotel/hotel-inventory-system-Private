@@ -97,18 +97,85 @@ BEGIN
 END$$;
 GRANT EXECUTE ON FUNCTION api.create_correction_version(uuid, jsonb, numeric) TO PUBLIC;
 
--- Manager/Admin: hard delete a record (permanent)
+-- Manager/Admin/Supervisor: edit configuration records (categories/collections) via correction version
+CREATE OR REPLACE FUNCTION api.edit_config_record(_previous_version_id uuid, _data jsonb)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  prev public.operational_records;
+  new_id uuid;
+  rec_type text;
+  new_data jsonb;
+BEGIN
+  IF app_current_role() NOT IN ('admin','manager','supervisor') THEN
+    RAISE EXCEPTION 'Only admin/manager/supervisor can edit configuration records.';
+  END IF;
+
+  SELECT * INTO prev FROM public.operational_records WHERE id = _previous_version_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Previous version % not found.', _previous_version_id;
+  END IF;
+
+  rec_type := COALESCE(prev.data->>'type', prev.data->>'record_type');
+  IF lower(rec_type) NOT IN ('config_category','config_collection') THEN
+    RAISE EXCEPTION 'Only configuration records can be edited via this routine.';
+  END IF;
+
+  -- Merge patch, preserve type
+  new_data := (prev.data || COALESCE(_data, '{}'::jsonb)) || jsonb_build_object('type', rec_type);
+
+  INSERT INTO public.operational_records(id, entity_type, data, financial_amount, status, submitted_by, reviewed_by, reviewed_at, rejection_reason, previous_version_id, original_id, version_no, deleted_at)
+  VALUES (gen_random_uuid(), prev.entity_type, new_data, 0, 'pending', app_current_user_id(), NULL, NULL, NULL, _previous_version_id, prev.original_id, prev.version_no + 1, NULL)
+  RETURNING id INTO new_id;
+
+  -- BEFORE INSERT trigger will auto-approve for config types and allowed roles
+  RETURN new_id;
+END$$;
+GRANT EXECUTE ON FUNCTION api.edit_config_record(uuid, jsonb) TO PUBLIC;
+
+-- Manager/Admin: hard delete a record (permanent) with safeguards for config references
 CREATE OR REPLACE FUNCTION api.hard_delete_record(_id uuid)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  prev public.operational_records;
+  rec_type text;
+  cat_name text;
+  col_name text;
 BEGIN
   IF app_current_role() NOT IN ('manager','admin') THEN
     RAISE EXCEPTION 'Only manager/admin can permanently delete records.';
   END IF;
 
-  DELETE FROM public.operational_records WHERE id = _id;
+  SELECT * INTO prev FROM public.operational_records WHERE id = _id;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Record not found.';
   END IF;
+
+  rec_type := COALESCE(prev.data->>'type', prev.data->>'record_type');
+  IF lower(rec_type) = 'config_category' THEN
+    cat_name := COALESCE(prev.data->>'category_name', prev.data->>'category');
+    IF EXISTS (
+      SELECT 1 FROM public.operational_records
+      WHERE status = 'approved' AND deleted_at IS NULL AND entity_type = 'storekeeper'
+        AND lower(data->>'type') = 'config_item'
+        AND lower(data->>'category') = lower(cat_name)
+    ) THEN
+      RAISE EXCEPTION 'Cannot delete category % because it is referenced by items. Deactivate instead.', cat_name;
+    END IF;
+  ELSIF lower(rec_type) = 'config_collection' THEN
+    cat_name := COALESCE(prev.data->>'category_name', prev.data->>'category');
+    col_name := prev.data->>'collection_name';
+    IF EXISTS (
+      SELECT 1 FROM public.operational_records
+      WHERE status = 'approved' AND deleted_at IS NULL AND entity_type = 'storekeeper'
+        AND lower(data->>'type') = 'config_item'
+        AND lower(data->>'category') = lower(cat_name)
+        AND lower(data->>'collection_name') = lower(col_name)
+    ) THEN
+      RAISE EXCEPTION 'Cannot delete collection % in category % because it is referenced by items. Deactivate instead.', col_name, cat_name;
+    END IF;
+  END IF;
+
+  DELETE FROM public.operational_records WHERE id = _id;
 END$$;
 GRANT EXECUTE ON FUNCTION api.hard_delete_record(uuid) TO PUBLIC;
 
@@ -125,3 +192,67 @@ BEGIN
     WHERE (_entity IS NULL OR entity_type = _entity);
 END$$;
 GRANT EXECUTE ON FUNCTION api.list_canonical_records(entity_type) TO PUBLIC;
+
+-- Public schema RPCs for frontend usage (Supabase client supports only public/graphql_public)
+CREATE OR REPLACE FUNCTION public.approve_record(_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated.';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.staff_profiles sp WHERE sp.user_id = auth.uid()
+  ) THEN
+    RAISE EXCEPTION 'User profile not found.';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.staff_profiles sp WHERE sp.user_id = auth.uid() AND sp.role IN ('supervisor','manager','admin')
+  ) THEN
+    RAISE EXCEPTION 'Permission denied: only supervisor/manager/admin can approve records.';
+  END IF;
+
+  UPDATE public.operational_records
+  SET status = 'approved',
+      reviewed_by = auth.uid(),
+      reviewed_at = now(),
+      rejection_reason = NULL
+  WHERE id = _id AND status = 'pending';
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Record not found or not pending.';
+  END IF;
+END$$;
+GRANT EXECUTE ON FUNCTION public.approve_record(uuid) TO PUBLIC;
+
+CREATE OR REPLACE FUNCTION public.reject_record(_id uuid, _reason text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated.';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.staff_profiles sp WHERE sp.user_id = auth.uid()
+  ) THEN
+    RAISE EXCEPTION 'User profile not found.';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.staff_profiles sp WHERE sp.user_id = auth.uid() AND sp.role IN ('supervisor','manager','admin')
+  ) THEN
+    RAISE EXCEPTION 'Permission denied: only supervisor/manager/admin can reject records.';
+  END IF;
+  IF COALESCE(_reason, '') = '' THEN
+    RAISE EXCEPTION 'Rejection requires a non-empty reason.';
+  END IF;
+
+  UPDATE public.operational_records
+  SET status = 'rejected',
+      rejection_reason = _reason,
+      reviewed_by = auth.uid(),
+      reviewed_at = now()
+  WHERE id = _id AND status = 'pending';
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Record not found or not pending.';
+  END IF;
+END$$;
+GRANT EXECUTE ON FUNCTION public.reject_record(uuid, text) TO PUBLIC;
