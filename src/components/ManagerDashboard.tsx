@@ -68,9 +68,6 @@ export default function ManagerDashboard() {
     fetchApproved();
   }, [canUse]);
 
-  const totalRecords = rows.length;
-  const totalRevenue = useMemo(() => rows.reduce((sum, r) => sum + (Number(r.financial_amount ?? 0) || 0), 0), [rows]);
-
   // Helpers for date checks (use approval date primarily)
   const isToday = (iso: string | null | undefined) => {
     if (!iso) return false;
