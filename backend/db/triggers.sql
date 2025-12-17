@@ -1,0 +1,2 @@
+-- Superseded by versioned migrations under backend/db/migrations.
+-- Triggers and audit reside in 0005_triggers.sql.

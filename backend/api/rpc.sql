@@ -1,0 +1,2 @@
+-- Superseded by versioned migrations under backend/db/migrations.
+-- RPC routines reside in 0006_rpc.sql.

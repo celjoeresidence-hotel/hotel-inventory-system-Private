@@ -1,0 +1,3 @@
+-- Superseded by versioned migrations under backend/db/migrations.
+-- This file is intentionally minimal to avoid duplicate definitions.
+-- See: 0001_enums_profiles.sql, 0002_operational_records_refactor.sql, 0003_helper_functions.sql, 0004_policies.sql, 0005_triggers.sql, 0006_rpc.sql

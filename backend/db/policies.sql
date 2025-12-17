@@ -1,0 +1,2 @@
+-- Superseded by versioned migrations under backend/db/migrations.
+-- RLS policies now reside in 0004_policies.sql.
