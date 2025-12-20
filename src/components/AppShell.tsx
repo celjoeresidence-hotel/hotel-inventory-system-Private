@@ -10,9 +10,10 @@ import StorekeeperStockForm from './StorekeeperStockForm';
 import AdminStaffManagement from './AdminStaffManagement';
 import InventorySetup from './InventorySetup';
 import InventoryCatalog from './InventoryCatalog';
+import AuditLog from './AuditLog';
 
 export default function AppShell() {
-  const { role, logout, user, isAdmin } = useAuth();
+  const { role, logout, user, isAdmin, isManager, isSupervisor } = useAuth();
 
   // Build menu items based on role
   const menu = useMemo(() => {
@@ -22,23 +23,29 @@ export default function AppShell() {
         { key: 'staff', label: 'Staff Management' },
         { key: 'inventory_catalog', label: 'Inventory Catalog' },
         { key: 'inventory_setup', label: 'Inventory Setup' },
+        { key: 'audit_log', label: 'Audit Log' },
+      ] as const;
+    }
+    if (isManager) {
+      return [
+        { key: 'manager', label: 'Manager Dashboard' },
+        { key: 'staff', label: 'Staff Management' },
+        { key: 'inventory_catalog', label: 'Inventory Catalog' },
+        { key: 'inventory_setup', label: 'Inventory Setup' },
+        { key: 'audit_log', label: 'Audit Log' },
+      ] as const;
+    }
+    if (isSupervisor) {
+      return [
+        { key: 'pending_approvals', label: 'Pending Approvals' },
+        { key: 'staff', label: 'Staff Management' },
+        { key: 'inventory_setup', label: 'Inventory Setup' },
+        { key: 'inventory_catalog', label: 'Inventory Catalog' },
       ] as const;
     }
     switch (role) {
       case 'front_desk':
         return [{ key: 'front_desk', label: 'Front Desk' }] as const;
-      case 'supervisor':
-        return [
-          { key: 'pending_approvals', label: 'Pending Approvals' },
-          { key: 'inventory_setup', label: 'Inventory Setup' },
-          { key: 'inventory_catalog', label: 'Inventory Catalog' },
-        ] as const;
-      case 'manager':
-        return [
-          { key: 'manager', label: 'Manager Dashboard' },
-          { key: 'inventory_catalog', label: 'Inventory Catalog' },
-          { key: 'inventory_setup', label: 'Inventory Setup' },
-        ] as const;
       case 'kitchen':
         return [{ key: 'kitchen', label: 'Kitchen Stock' }] as const;
       case 'bar':
@@ -48,7 +55,7 @@ export default function AppShell() {
       default:
         return [{ key: 'none', label: 'No role assigned' }] as const;
     }
-  }, [role, isAdmin]);
+  }, [role, isAdmin, isManager, isSupervisor]);
 
   const [activeKey, setActiveKey] = useState<string>(menu[0]?.key);
 
@@ -58,19 +65,27 @@ export default function AppShell() {
       if (activeKey === 'staff') return <AdminStaffManagement />;
       if (activeKey === 'inventory_catalog') return <InventoryCatalog />;
       if (activeKey === 'inventory_setup') return <InventorySetup />;
+      if (activeKey === 'audit_log') return <AuditLog />;
       return <AdminRooms />;
+    }
+    if (isManager) {
+      if (activeKey === 'manager') return <ManagerDashboard />;
+      if (activeKey === 'staff') return <AdminStaffManagement />;
+      if (activeKey === 'inventory_catalog') return <InventoryCatalog />;
+      if (activeKey === 'inventory_setup') return <InventorySetup />;
+      if (activeKey === 'audit_log') return <AuditLog />;
+      return <ManagerDashboard />;
+    }
+    if (isSupervisor) {
+      if (activeKey === 'pending_approvals') return <SupervisorInbox />;
+      if (activeKey === 'staff') return <AdminStaffManagement />;
+      if (activeKey === 'inventory_setup') return <InventorySetup />;
+      if (activeKey === 'inventory_catalog') return <InventoryCatalog />;
+      return <SupervisorInbox />;
     }
     switch (activeKey) {
       case 'front_desk':
         return <FrontDeskDashboard />;
-      case 'pending_approvals':
-        return <SupervisorInbox />;
-      case 'inventory_setup':
-        return <InventorySetup />;
-      case 'inventory_catalog':
-        return <InventoryCatalog />;
-      case 'manager':
-        return <ManagerDashboard />;
       case 'kitchen':
         return <KitchenStockForm />;
       case 'bar':
