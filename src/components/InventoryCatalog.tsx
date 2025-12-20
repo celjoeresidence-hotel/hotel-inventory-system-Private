@@ -42,51 +42,68 @@ export default function InventoryCatalog() {
       setLoading(true);
       try {
         if (!canView || !supabase) return;
-        // Fetch approved, non-deleted config records directly from operational_records (Inventory Setup data)
+        // Fetch approved, non-deleted config records directly from operational_records and dedupe latest per original_id
         const [catRes, colRes, itemRes] = await Promise.all([
           supabase
             .from('operational_records')
-            .select('id, data')
+            .select('id, data, original_id, version_no, created_at, status, deleted_at')
             .eq('status', 'approved')
             .is('deleted_at', null)
             .eq('entity_type', 'storekeeper')
-            .filter('data->>type', 'eq', 'config_category'),
+            .filter('data->>type', 'eq', 'config_category')
+            .order('created_at', { ascending: false }),
           supabase
             .from('operational_records')
-            .select('id, data')
+            .select('id, data, original_id, version_no, created_at, status, deleted_at')
             .eq('status', 'approved')
             .is('deleted_at', null)
             .eq('entity_type', 'storekeeper')
-            .filter('data->>type', 'eq', 'config_collection'),
+            .filter('data->>type', 'eq', 'config_collection')
+            .order('created_at', { ascending: false }),
           supabase
             .from('operational_records')
-            .select('id, data')
+            .select('id, data, original_id, version_no, created_at, status, deleted_at')
             .eq('status', 'approved')
             .is('deleted_at', null)
             .eq('entity_type', 'storekeeper')
-            .filter('data->>type', 'eq', 'config_item'),
+            .filter('data->>type', 'eq', 'config_item')
+            .order('created_at', { ascending: false }),
         ]);
 
         if (catRes.error) { setError(catRes.error.message); return; }
         if (colRes.error) { setError(colRes.error.message); return; }
         if (itemRes.error) { setError(itemRes.error.message); return; }
 
-        const categoriesRaw = (catRes.data ?? []).map((r: any) => ({
+        const dedupLatest = (rows: any[]) => {
+          const seen = new Set<string>();
+          const out: any[] = [];
+          for (const r of rows ?? []) {
+            const oid = String(r?.original_id ?? r?.id ?? '');
+            if (!oid) continue;
+            if (seen.has(oid)) continue;
+            seen.add(oid);
+            out.push(r);
+          }
+          return out;
+        };
+
+        const categoriesRaw = dedupLatest(catRes.data ?? []).map((r: any) => ({
           name: String(r?.data?.category_name ?? r?.data?.category ?? ''),
           active: (r?.data?.active ?? true) !== false,
         })).filter((c: any) => c.name);
 
-        const collectionsRaw = (colRes.data ?? []).map((r: any) => ({
+        const collectionsRaw = dedupLatest(colRes.data ?? []).map((r: any) => ({
           name: String(r?.data?.collection_name ?? ''),
           category: String(r?.data?.category_name ?? r?.data?.category ?? ''),
           active: (r?.data?.active ?? true) !== false,
         })).filter((c: any) => c.name && c.category);
 
-        const itemsRaw = (itemRes.data ?? []).map((r: any) => ({
+        const itemsRaw = dedupLatest(itemRes.data ?? []).map((r: any) => ({
           item_name: String(r?.data?.item_name ?? ''),
           unit: r?.data?.unit ?? null,
           category: String(r?.data?.category_name ?? r?.data?.category ?? ''),
           collection_name: String(r?.data?.collection_name ?? ''),
+          active: (r?.data?.active ?? true) !== false,
         })).filter((it: any) => it.item_name && it.category && it.collection_name);
 
         // Compute current stock from latest approved opening_stock per item
@@ -134,7 +151,7 @@ export default function InventoryCatalog() {
           if (!entry.colMap.has(it.collection_name)) entry.colMap.set(it.collection_name, { active: true, items: [] });
           const colEntry = entry.colMap.get(it.collection_name)!;
           const current_stock = stockMap.has(it.item_name) ? stockMap.get(it.item_name)! : null;
-          const active = entry.active && colEntry.active; // item inherits status from category/collection
+          const active = entry.active && colEntry.active && (it.active ?? true);
           colEntry.items.push({ item_name: it.item_name, unit: it.unit ?? null, current_stock, active });
         }
 
