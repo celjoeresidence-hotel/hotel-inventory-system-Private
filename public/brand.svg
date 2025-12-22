@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title>Brand Logo</title>
+  <desc>Placeholder brand logo for the Hotel Inventory Management System</desc>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#00695C"/>
+      <stop offset="100%" stop-color="#00BFA5"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="20" fill="url(#g)"/>
+  <g fill="#ffffff" stroke="#ffffff" stroke-width="2" transform="translate(24,24)">
+    <path d="M0 64 L16 16 L32 64" fill="none"/>
+    <path d="M36 64 L52 16 L68 64" fill="none"/>
+    <circle cx="16" cy="16" r="3" />
+    <circle cx="52" cy="16" r="3" />
+    <text x="12" y="80" font-family="Montserrat, Arial, sans-serif" font-size="16" font-weight="700">IMS</text>
+  </g>
+</svg>

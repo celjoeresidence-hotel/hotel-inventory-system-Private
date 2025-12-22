@@ -105,7 +105,10 @@ export default function AppShell() {
   return (
     <div className="app-layout" style={{ display: 'grid', gridTemplateColumns: '220px 1fr', minHeight: '100vh' }}>
       <aside className="sidebar" style={{ borderRight: '1px solid #eee', padding: 16 }}>
-        <div style={{ fontWeight: 700, fontSize: 20, marginBottom: 12 }}>Hotel IMS</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 20, marginBottom: 12 }}>
+          <img src="https://ik.imagekit.io/t48u898g8/CCCJ__1_-1-removebg-preview.svg" alt="Brand" style={{ width: 28, height: 28 }} />
+          <span>Hotel IMS</span>
+        </div>
         <nav>
           <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
             {menu.map((item) => (
@@ -124,13 +127,23 @@ export default function AppShell() {
       </aside>
       <div className="content" style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid #eee' }}>
-          <h1 style={{ margin: 0, fontSize: 22 }}>Celjoe Residence</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <img
+              src="https://ik.imagekit.io/t48u898g8/CCCJ__1_-1-removebg-preview.svg"
+              alt="Celjoe Residence"
+              style={{ height: 36 }}
+            />
+          </div>
           <div>
             {user?.email && <span style={{ marginRight: 12 }}>Signed in as {user.email}</span>}
             <button className="btn" onClick={logout}>Logout</button>
           </div>
         </header>
         <main style={{ padding: 16 }}>{renderContent()}</main>
+        <footer style={{ marginTop: 'auto', padding: '12px 16px', borderTop: '1px solid #eee', color: '#666', fontSize: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>© {new Date().getFullYear()} All rights reserved.</span>
+          <span>Created and developed by Web Woven Studios</span>
+        </footer>
       </div>
     </div>
   );

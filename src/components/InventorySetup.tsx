@@ -31,6 +31,7 @@ export default function InventorySetup() {
   const { session, isConfigured, isSupervisor, isManager, isAdmin } = useAuth();
   const canView = useMemo(() => Boolean(isConfigured && session && (isSupervisor || isManager || isAdmin)), [isConfigured, session, isSupervisor, isManager, isAdmin]);
   const canEditStructure = useMemo(() => Boolean(isSupervisor || isManager || isAdmin), [isSupervisor, isManager, isAdmin]);
+  const canDeleteItem = useMemo(() => Boolean(isManager || isAdmin), [isManager, isAdmin]);
   // removed: const canAddItem = useMemo(() => Boolean(isManager || isAdmin), [isManager, isAdmin]);
 
   const [activeTab, setActiveTab] = useState<'structure' | 'items_stock'>('structure');
@@ -413,7 +414,7 @@ export default function InventorySetup() {
     if (newCategoryAssignedKitchen) assigned.push('kitchen');
     if (newCategoryAssignedBar) assigned.push('bar');
     if (newCategoryAssignedStorekeeper) assigned.push('storekeeper');
-    await insertConfigRecord({ type: 'config_category', category_name: newCategoryName.trim(), active: true, assigned_to: assigned });
+    await insertAndApproveStorekeeper({ type: 'config_category', category_name: newCategoryName.trim(), active: true, assigned_to: assigned });
     setSavingCategory(false);
     setNewCategoryName('');
     setNewCategoryAssignedKitchen(false);
@@ -440,7 +441,13 @@ export default function InventorySetup() {
         setError('Supabase is not configured.');
         return;
       }
-      await supabase.rpc('edit_config_record', { _previous_version_id: cat.id, _data: { active: !cat.active } });
+      const { data: newVersionId, error: editErr } = await supabase.rpc('edit_config_record', { _previous_version_id: cat.id, _data: { active: !cat.active } });
+      if (editErr) { setError(editErr.message); return; }
+      const newId: any = typeof newVersionId === 'string' ? newVersionId : (newVersionId?.id ?? newVersionId);
+      if (newId) {
+        const { error: aprErr } = await supabase.rpc('approve_record', { _id: newId });
+        if (aprErr) { setError(aprErr.message); return; }
+      }
       setCategoriesReloadKey((k) => k + 1);
     } catch (e: any) {
       setError(typeof e?.message === 'string' ? e.message : 'Unexpected error');
@@ -454,7 +461,13 @@ export default function InventorySetup() {
         setError('Supabase is not configured.');
         return;
       }
-      await supabase.rpc('edit_config_record', { _previous_version_id: col.id, _data: { active: !(col.active ?? true) } });
+      const { data: newVersionId, error: editErr } = await supabase.rpc('edit_config_record', { _previous_version_id: col.id, _data: { active: !(col.active ?? true) } });
+      if (editErr) { setError(editErr.message); return; }
+      const newId: any = typeof newVersionId === 'string' ? newVersionId : (newVersionId?.id ?? newVersionId);
+      if (newId) {
+        const { error: aprErr } = await supabase.rpc('approve_record', { _id: newId });
+        if (aprErr) { setError(aprErr.message); return; }
+      }
       setCollectionsReloadKey((k) => k + 1);
     } catch (e: any) {
       setError(typeof e?.message === 'string' ? e.message : 'Unexpected error');
@@ -529,7 +542,13 @@ export default function InventorySetup() {
       if (editAssignedKitchen) assigned.push('kitchen');
       if (editAssignedBar) assigned.push('bar');
       if (editAssignedStorekeeper) assigned.push('storekeeper');
-      await supabase.rpc('edit_config_record', { _previous_version_id: editCategoryTarget.id, _data: { assigned_to: assigned } });
+      const { data: newVersionId, error: editErr } = await supabase.rpc('edit_config_record', { _previous_version_id: editCategoryTarget.id, _data: { assigned_to: assigned } });
+      if (editErr) { setError(editErr.message); return; }
+      const newId: any = typeof newVersionId === 'string' ? newVersionId : (newVersionId?.id ?? newVersionId);
+      if (newId) {
+        const { error: aprErr } = await supabase.rpc('approve_record', { _id: newId });
+        if (aprErr) { setError(aprErr.message); return; }
+      }
       setEditCategoryOpen(false);
       setEditCategoryTarget(null);
       setCategoriesReloadKey((k) => k + 1);
@@ -670,6 +689,36 @@ export default function InventorySetup() {
       setError(typeof e?.message === 'string' ? e.message : 'Unexpected error');
     } finally {
       setEditItemSaving(false);
+    }
+  }
+
+  async function handleDeleteItem(target: ItemRow) {
+    if (!canDeleteItem) return;
+    setError(null);
+    setMessage(null);
+    try {
+      if (!supabase) {
+        setError('Supabase is not configured.');
+        return;
+      }
+      if (!target?.id) {
+        setError('Invalid item selected for deletion.');
+        return;
+      }
+      const confirmed = window.confirm(`Are you sure you want to delete item \"${target.item_name}\"? This cannot be undone.`);
+      if (!confirmed) return;
+      const { error: delErr } = await supabase.rpc('delete_config_item', { _id: target.id });
+      if (delErr) {
+        const { error: softErr } = await supabase.rpc('soft_delete_record', { _id: target.id });
+        if (softErr) {
+          setError(softErr.message || delErr.message);
+          return;
+        }
+      }
+      setMessage('Item deleted successfully.');
+      setItemsReloadKey((prev) => prev + 1);
+    } catch (e: any) {
+      setError(typeof e?.message === 'string' ? e.message : 'Unexpected error');
     }
   }
 
@@ -916,7 +965,10 @@ export default function InventorySetup() {
                             <button className="btn" style={{ background: '#eee', color: '#333', marginRight: 8 }} onClick={() => openEditItem(it)}>Edit Item</button>
                             <button className="btn" style={{ background: '#eee', color: '#333', marginRight: 8 }} onClick={() => openEditOpening(it)}>Edit Opening Stock</button>
                             <button className="btn" style={{ background: '#1B5E20', color: '#fff', marginRight: 8 }} onClick={() => openStockHistory(it)}>Stock History</button>
-                            <button className="btn" style={{ background: '#1B5E20', color: '#fff' }} onClick={() => { setAdjustItem(it); setAdjustOpen(true); }} disabled={!canAdjustOpeningStock}>Adjust Opening Stock</button>
+                            <button className="btn" style={{ background: '#1B5E20', color: '#fff', marginRight: 8 }} onClick={() => { setAdjustItem(it); setAdjustOpen(true); }} disabled={!canAdjustOpeningStock}>Adjust Opening Stock</button>
+                            {canDeleteItem && (
+                              <button className="btn" style={{ background: '#B71C1C', color: '#fff' }} onClick={() => handleDeleteItem(it)}>Delete Item</button>
+                            )}
                           </>
                         )}
                         {/* For viewers, allow history view only */}

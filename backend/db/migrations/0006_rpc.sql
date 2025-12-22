@@ -457,3 +457,50 @@ BEGIN
   PERFORM api.hard_delete_record(_id);
 END$$;
 GRANT EXECUTE ON FUNCTION public.delete_config_item(uuid) TO PUBLIC;
+
+-- List categories assigned to a given role (bar/kitchen/storekeeper) from canonical approved config_category
+CREATE OR REPLACE FUNCTION public.list_assigned_categories_for_role(_role text)
+RETURNS TABLE(category_name text) LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+  SELECT DISTINCT COALESCE(rc.data->>'category_name', rc.data->>'category') AS category_name
+  FROM public.canonical_operational_records rc
+  WHERE rc.entity_type = 'storekeeper'
+    AND lower(COALESCE(rc.data->>'type', rc.data->>'record_type')) = 'config_category'
+    AND COALESCE((rc.data->>'active')::boolean, true) = true
+    AND (
+      (jsonb_typeof(rc.data->'assigned_to') = 'array' AND (rc.data->'assigned_to') ? _role)
+      OR (jsonb_typeof(rc.data->'assigned_to') = 'object' AND COALESCE((rc.data->'assigned_to'->>_role)::boolean, false) = true)
+    );
+$$;
+GRANT EXECUTE ON FUNCTION public.list_assigned_categories_for_role(text) TO PUBLIC;
+
+-- List items for a given category with unit, unit_price, and latest opening_stock
+CREATE OR REPLACE FUNCTION public.list_items_for_category(_category text)
+RETURNS TABLE(item_name text, unit text, unit_price numeric, opening_stock numeric) LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+  WITH items AS (
+    SELECT
+      rit.data->>'item_name' AS item_name,
+      rit.data->>'unit' AS unit,
+      COALESCE((rit.data->>'unit_price')::numeric, NULL) AS unit_price
+    FROM public.canonical_operational_records rit
+    WHERE rit.entity_type = 'storekeeper'
+      AND lower(COALESCE(rit.data->>'type', rit.data->>'record_type')) = 'config_item'
+      AND COALESCE((rit.data->>'active')::boolean, true) = true
+      AND lower(COALESCE(rit.data->>'category_name', rit.data->>'category')) = lower(_category)
+  ), opening AS (
+    SELECT DISTINCT ON (ros.data->>'item_name')
+      ros.data->>'item_name' AS item_name,
+      COALESCE((ros.data->>'quantity')::numeric, 0) AS qty
+    FROM public.operational_records ros
+    WHERE ros.status = 'approved'
+      AND ros.deleted_at IS NULL
+      AND ros.entity_type = 'storekeeper'
+      AND lower(COALESCE(ros.data->>'type', ros.data->>'record_type')) = 'opening_stock'
+    ORDER BY ros.data->>'item_name', ros.created_at DESC NULLS LAST, ros.reviewed_at DESC NULLS LAST
+  )
+  SELECT i.item_name, i.unit, i.unit_price, COALESCE(o.qty, 0) AS opening_stock
+  FROM items i
+  LEFT JOIN opening o ON o.item_name = i.item_name
+  WHERE i.item_name IS NOT NULL AND i.item_name <> ''
+  ORDER BY i.item_name;
+$$;
+GRANT EXECUTE ON FUNCTION public.list_items_for_category(text) TO PUBLIC;
