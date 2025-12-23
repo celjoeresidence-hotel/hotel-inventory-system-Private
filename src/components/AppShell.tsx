@@ -11,6 +11,7 @@ import AdminStaffManagement from './AdminStaffManagement';
 import InventorySetup from './InventorySetup';
 import InventoryCatalog from './InventoryCatalog';
 import AuditLog from './AuditLog';
+import ManagerFinancials from './ManagerFinancials';
 
 export default function AppShell() {
   const { role, logout, user, isAdmin, isManager, isSupervisor } = useAuth();
@@ -21,6 +22,7 @@ export default function AppShell() {
       return [
         { key: 'rooms', label: 'Rooms' },
         { key: 'staff', label: 'Staff Management' },
+        { key: 'financials', label: 'Financial Reports' },
         { key: 'inventory_catalog', label: 'Inventory Catalog' },
         { key: 'inventory_setup', label: 'Inventory Setup' },
         { key: 'audit_log', label: 'Audit Log' },
@@ -29,6 +31,7 @@ export default function AppShell() {
     if (isManager) {
       return [
         { key: 'manager', label: 'Manager Dashboard' },
+        { key: 'financials', label: 'Financial Reports' },
         { key: 'staff', label: 'Staff Management' },
         { key: 'inventory_catalog', label: 'Inventory Catalog' },
         { key: 'inventory_setup', label: 'Inventory Setup' },
@@ -63,6 +66,7 @@ export default function AppShell() {
     if (isAdmin) {
       if (activeKey === 'rooms') return <AdminRooms />;
       if (activeKey === 'staff') return <AdminStaffManagement />;
+      if (activeKey === 'financials') return <ManagerFinancials />;
       if (activeKey === 'inventory_catalog') return <InventoryCatalog />;
       if (activeKey === 'inventory_setup') return <InventorySetup />;
       if (activeKey === 'audit_log') return <AuditLog />;
@@ -70,6 +74,7 @@ export default function AppShell() {
     }
     if (isManager) {
       if (activeKey === 'manager') return <ManagerDashboard />;
+      if (activeKey === 'financials') return <ManagerFinancials />;
       if (activeKey === 'staff') return <AdminStaffManagement />;
       if (activeKey === 'inventory_catalog') return <InventoryCatalog />;
       if (activeKey === 'inventory_setup') return <InventorySetup />;
