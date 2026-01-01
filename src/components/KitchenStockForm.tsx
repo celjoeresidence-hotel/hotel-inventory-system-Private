@@ -10,6 +10,7 @@ import { SearchInput } from './ui/SearchInput'
 import { Select } from './ui/Select'
 import { Pagination } from './ui/Pagination'
 import { IconAlertCircle, IconCheckCircle, IconChefHat } from './ui/Icons'
+import { StaffSelect } from './ui/StaffSelect'
 
 export default function KitchenStockForm() {
   const { role, session, isConfigured } = useAuth()
@@ -46,6 +47,7 @@ export default function KitchenStockForm() {
   const [restockedMap, setRestockedMap] = useState<Record<string, number>>({})
   const [soldMap, setSoldMap] = useState<Record<string, number>>({})
   const [notesMap, setNotesMap] = useState<Record<string, string>>({})
+  const [staffName, setStaffName] = useState<string>('')
 
   // Reset pagination/search on category change
   useEffect(() => {
@@ -125,8 +127,8 @@ export default function KitchenStockForm() {
             const assigned = c._assigned
             if (Array.isArray(assigned)) return assigned.includes('kitchen')
             if (assigned && typeof assigned === 'object') return Boolean(assigned?.kitchen)
-            // If no assigned_to, include by default so kitchen can see categories
-            return true
+            // Strict filtering: if not explicitly assigned, do not show
+            return false
           }).map((c: any) => ({ name: c.name, active: c.active }))
         }
         setCategories(cats)
@@ -252,6 +254,12 @@ export default function KitchenStockForm() {
   const handleSubmit = async () => {
     setError(null)
     setSuccess(null)
+
+    if (!staffName) {
+      setError('Please select a staff member responsible for today.')
+      return
+    }
+
     if (!isConfigured || !session || !supabase) {
       setError('Authentication required. Please sign in.')
       return
@@ -275,6 +283,7 @@ export default function KitchenStockForm() {
       const total = s * u
       const payload: KitchenStockData = {
         date,
+        staff_name: staffName,
         item_name: row.item_name,
         opening_stock: o,
         restocked: r,
@@ -284,7 +293,11 @@ export default function KitchenStockForm() {
         total_amount: total,
         notes: n || undefined
       } as any
-      records.push({ entity_type: 'kitchen', data: payload, financial_amount: total })
+      records.push({
+        entity_type: 'kitchen',
+        data: payload,
+        financial_amount: total,
+      })
     }
     if (records.length === 0) {
       setError('Enter restocked or sold quantities (or notes) for at least one item.')
@@ -323,7 +336,14 @@ export default function KitchenStockForm() {
           </h1>
           <p className="text-sm text-gray-500 mt-1 ml-12">Manage inventory usage and requests for the kitchen</p>
         </div>
-        <div className="w-full md:w-auto">
+        <div className="w-full md:w-auto flex flex-col md:flex-row gap-4">
+          <StaffSelect
+            role="kitchen"
+            value={staffName}
+            onChange={setStaffName}
+            disabled={submitting}
+            className="w-full md:w-48"
+          />
           <Input
             type="date"
             label="Date"

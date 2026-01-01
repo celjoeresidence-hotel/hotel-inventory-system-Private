@@ -82,6 +82,7 @@ export default function RoomBookingForm() {
         const mapped: RoomOption[] = (data ?? []).map((r: any) => ({
           id: String(r.id),
           room_number: String(r.room_number ?? ''),
+          room_name: r.room_name ? String(r.room_name) : undefined,
           room_type: String(r.room_type ?? ''),
           price_per_night: Number(r.price_per_night ?? 0),
         }));

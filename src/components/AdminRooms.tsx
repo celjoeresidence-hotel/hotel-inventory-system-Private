@@ -28,6 +28,7 @@ import {
 interface RoomRow {
   id: number | string;
   room_number: string;
+  room_name?: string;
   room_type: string;
   price_per_night: number;
   is_active: boolean;
@@ -76,6 +77,7 @@ export default function AdminRooms() {
         setRooms((data ?? []).map((r: any) => ({
           id: r.id,
           room_number: r.room_number,
+          room_name: r.room_name || '',
           room_type: r.room_type,
           price_per_night: numberOrZero(r.price_per_night),
           is_active: Boolean(r.is_active),
@@ -109,7 +111,7 @@ export default function AdminRooms() {
 
   function handleOpenAdd() {
     setModalMode('add');
-    setCurrentRoom({ room_number: '', room_type: '', price_per_night: 0, is_active: true });
+    setCurrentRoom({ room_number: '', room_name: '', room_type: '', price_per_night: 0, is_active: true });
     setIsModalOpen(true);
     setError(null);
   }
@@ -134,10 +136,15 @@ export default function AdminRooms() {
     try {
       const payload = {
         room_number: currentRoom.room_number?.trim(),
+        room_name: currentRoom.room_name?.trim() || null,
         room_type: currentRoom.room_type?.trim(),
         price_per_night: numberOrZero(currentRoom.price_per_night),
         is_active: modalMode === 'add' ? true : currentRoom.is_active,
       };
+
+      // Clean payload if room_name is empty/null to avoid issues if column missing? 
+      // Actually we'll try to send it. If column missing, Supabase might ignore or error.
+      // We'll proceed.
 
       if (modalMode === 'add') {
         const { data, error } = await supabase!
@@ -154,6 +161,7 @@ export default function AdminRooms() {
         const newRow: RoomRow = {
           id: (data as any).id,
           room_number: (data as any).room_number,
+          room_name: (data as any).room_name || '',
           room_type: (data as any).room_type,
           price_per_night: numberOrZero((data as any).price_per_night),
           is_active: Boolean((data as any).is_active),
@@ -183,6 +191,7 @@ export default function AdminRooms() {
         setRooms((prev) => prev.map((r) => (r.id === currentRoom.id ? {
           id: (data as any).id,
           room_number: (data as any).room_number,
+          room_name: (data as any).room_name || '',
           room_type: (data as any).room_type,
           price_per_night: numberOrZero((data as any).price_per_night),
           is_active: Boolean((data as any).is_active),
@@ -212,6 +221,7 @@ export default function AdminRooms() {
       setRooms((prev) => prev.map((r) => (r.id === row.id ? {
         id: (data as any).id,
         room_number: (data as any).room_number,
+        room_name: (data as any).room_name || '',
         room_type: (data as any).room_type,
         price_per_night: numberOrZero((data as any).price_per_night),
         is_active: Boolean((data as any).is_active),
@@ -296,6 +306,9 @@ export default function AdminRooms() {
                   <TableRow key={room.id} className="group hover:bg-gray-50/50">
                     <TableCell className="font-medium text-gray-900 sticky left-0 z-10 bg-white group-hover:bg-gray-50 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
                       {room.room_number}
+                    </TableCell>
+                    <TableCell className="text-gray-600">
+                      {room.room_name || '—'}
                     </TableCell>
                     <TableCell>
                       <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">

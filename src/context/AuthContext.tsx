@@ -55,6 +55,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       const { data, error } = await supabase!.auth.getSession();
       if (error) {
+        console.warn('Auth session init error:', error.message);
+        // If the refresh token is invalid, ensure we clear any stale local storage
+        if (error.message.includes('Refresh Token Not Found') || error.message.includes('Invalid Refresh Token')) {
+          await supabase!.auth.signOut().catch(() => {});
+        }
         setLoading(false);
         return;
       }

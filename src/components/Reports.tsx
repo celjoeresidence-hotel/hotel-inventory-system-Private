@@ -1,15 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
 import { Card } from './ui/Card';
 import { Input } from './ui/Input';
+import { Select } from './ui/Select';
 import { Badge } from './ui/Badge';
 import { Button } from './ui/Button';
 import { 
   IconFileText, 
-  IconCalendar, 
   IconChevronDown,
   IconChevronRight,
-  IconPrinter
+  IconPrinter,
+  IconPieChart,
+  IconList
 } from './ui/Icons';
 import {
   Table,
@@ -21,6 +23,7 @@ import {
 } from './ui/Table';
 
 type ReportSection = 'kitchen' | 'bar' | 'storekeeper';
+type QueryMode = 'day' | 'range' | 'month' | 'year';
 
 interface DailySummary {
   section: ReportSection;
@@ -43,7 +46,12 @@ interface DetailRecord {
 }
 
 export default function Reports() {
-  const [date, setDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [queryMode, setQueryMode] = useState<QueryMode>('day');
+  const [startDate, setStartDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [endDate, setEndDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [month, setMonth] = useState<string>(() => new Date().toISOString().slice(0, 7)); // YYYY-MM
+  const [year, setYear] = useState<string>(() => new Date().getFullYear().toString());
+
   const [loading, setLoading] = useState<boolean>(false);
   const [summaries, setSummaries] = useState<DailySummary[]>([]);
   const [details, setDetails] = useState<Record<ReportSection, DetailRecord[]>>({
@@ -52,22 +60,32 @@ export default function Reports() {
     storekeeper: []
   });
   const [expandedSection, setExpandedSection] = useState<ReportSection | null>(null);
+  const [viewMode, setViewMode] = useState<'list' | 'breakdown'>('list');
 
   useEffect(() => {
-    async function fetchDailyReport() {
+    async function fetchReport() {
       if (!isSupabaseConfigured || !supabase) return;
       setLoading(true);
       try {
-        // Fetch all operational records for this date
-        // We filter by data->>date
-        const { data, error } = await supabase
+        let query = supabase
           .from('operational_records')
           .select('id, entity_type, data, created_at, status, deleted_at')
-          .eq('status', 'approved') // Only show approved records in reports
+          .eq('status', 'approved')
           .is('deleted_at', null)
-          .eq('data->>date', date)
-          .in('entity_type', ['kitchen', 'bar', 'storekeeper'])
-          .order('created_at', { ascending: true });
+          .in('entity_type', ['kitchen', 'bar', 'storekeeper']);
+
+        // Apply filters based on queryMode
+        if (queryMode === 'day') {
+          query = query.eq('data->>date', startDate);
+        } else if (queryMode === 'range') {
+          query = query.gte('data->>date', startDate).lte('data->>date', endDate);
+        } else if (queryMode === 'month') {
+          query = query.like('data->>date', `${month}%`);
+        } else if (queryMode === 'year') {
+          query = query.like('data->>date', `${year}%`);
+        }
+
+        const { data, error } = await query.order('created_at', { ascending: true });
 
         if (error) throw error;
 
@@ -116,9 +134,9 @@ export default function Reports() {
             if (ts > lastTs) lastTs = ts;
 
             const t = r.type;
-            if (t?.includes('restock')) restocked++;
-            else if (t?.includes('issued') || t?.includes('sold')) issued++;
-            else if (t?.includes('discarded') || t?.includes('waste')) discarded++;
+            if (t?.includes('restock')) restocked += r.quantity; // Sum quantities instead of counting records for more meaningful summary
+            else if (t?.includes('issued') || t?.includes('sold')) issued += r.quantity;
+            else if (t?.includes('discarded') || t?.includes('waste')) discarded += r.quantity;
           });
 
           return {
@@ -126,7 +144,7 @@ export default function Reports() {
             total_records: records.length,
             last_updated: lastTs > 0 ? new Date(lastTs).toISOString() : '',
             items_restocked: restocked,
-            items_issued: issued, // simplified count of distinct items/actions
+            items_issued: issued, 
             items_discarded: discarded,
             status: 'submitted'
           };
@@ -140,12 +158,15 @@ export default function Reports() {
       }
     }
 
-    fetchDailyReport();
-  }, [date]);
+    fetchReport();
+  }, [queryMode, startDate, endDate, month, year]);
 
   const toggleExpand = (section: ReportSection) => {
     if (expandedSection === section) setExpandedSection(null);
-    else setExpandedSection(section);
+    else {
+      setExpandedSection(section);
+      setViewMode('list'); // Reset view mode when opening
+    }
   };
 
   const sectionLabel = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -159,30 +180,108 @@ export default function Reports() {
     }
   };
 
+  const getBreakdown = useMemo(() => {
+    if (!expandedSection) return [];
+    const records = details[expandedSection];
+    const breakdown: Record<string, { restocked: number, issued: number, discarded: number }> = {};
+    
+    records.forEach(r => {
+      const name = r.item_name || 'Unknown Item';
+      if (!breakdown[name]) {
+        breakdown[name] = { restocked: 0, issued: 0, discarded: 0 };
+      }
+      
+      const t = r.type;
+      if (t?.includes('restock')) breakdown[name].restocked += r.quantity;
+      else if (t?.includes('issued') || t?.includes('sold')) breakdown[name].issued += r.quantity;
+      else if (t?.includes('discarded') || t?.includes('waste')) breakdown[name].discarded += r.quantity;
+    });
+
+    return Object.entries(breakdown)
+      .map(([name, stats]) => ({ name, ...stats }))
+      .sort((a, b) => b.issued - a.issued); // Sort by usage (issued)
+  }, [details, expandedSection]);
+
   return (
-    <div className="max-w-5xl mx-auto space-y-6 animate-in fade-in duration-500">
+    <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-500">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 tracking-tight flex items-center gap-2">
             <IconFileText className="w-6 h-6 text-green-600" />
-            Daily Reports
+            Operational Reports
           </h1>
-          <p className="text-gray-500 text-sm mt-1">Consolidated view of daily hotel operations</p>
+          <p className="text-gray-500 text-sm mt-1">
+            {queryMode === 'day' && `Daily report for ${startDate}`}
+            {queryMode === 'range' && `Report from ${startDate} to ${endDate}`}
+            {queryMode === 'month' && `Monthly report for ${month}`}
+            {queryMode === 'year' && `Annual report for ${year}`}
+          </p>
         </div>
         
-        <div className="flex items-center gap-3">
-          <div className="relative">
-            <IconCalendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <Input 
-              type="date" 
-              value={date} 
-              onChange={(e) => setDate(e.target.value)}
-              className="pl-9 w-40 font-medium"
-            />
-          </div>
-          <Button variant="outline" onClick={() => window.print()}>
-            <IconPrinter className="w-4 h-4 mr-2" />
-            Print
+        <div className="flex flex-col sm:flex-row items-end sm:items-center gap-3 bg-white p-2 rounded-lg border border-gray-200 shadow-sm">
+           <div className="w-32">
+             <Select
+               value={queryMode}
+               onChange={(e) => setQueryMode(e.target.value as QueryMode)}
+               fullWidth
+               options={[
+                 { value: 'day', label: 'Daily' },
+                 { value: 'range', label: 'Date Range' },
+                 { value: 'month', label: 'Monthly' },
+                 { value: 'year', label: 'Yearly' },
+               ]}
+             />
+           </div>
+
+           {queryMode === 'day' && (
+             <Input 
+               type="date" 
+               value={startDate} 
+               onChange={(e) => setStartDate(e.target.value)}
+               className="w-40"
+             />
+           )}
+
+           {queryMode === 'range' && (
+             <div className="flex items-center gap-2">
+               <Input 
+                 type="date" 
+                 value={startDate} 
+                 onChange={(e) => setStartDate(e.target.value)}
+                 className="w-36"
+               />
+               <span className="text-gray-400">-</span>
+               <Input 
+                 type="date" 
+                 value={endDate} 
+                 onChange={(e) => setEndDate(e.target.value)}
+                 className="w-36"
+               />
+             </div>
+           )}
+
+           {queryMode === 'month' && (
+             <Input 
+               type="month" 
+               value={month} 
+               onChange={(e) => setMonth(e.target.value)}
+               className="w-40"
+             />
+           )}
+
+           {queryMode === 'year' && (
+             <Input 
+               type="number" 
+               min="2020"
+               max="2030"
+               value={year} 
+               onChange={(e) => setYear(e.target.value)}
+               className="w-24"
+             />
+           )}
+
+          <Button variant="outline" onClick={() => window.print()} title="Print Report">
+            <IconPrinter className="w-4 h-4" />
           </Button>
         </div>
       </div>
@@ -212,28 +311,30 @@ export default function Reports() {
                     {getSectionIcon(summary.section)}
                   </div>
                   <Badge variant={summary.status === 'submitted' ? 'success' : 'default'}>
-                    {summary.status === 'submitted' ? 'Submitted' : 'Pending'}
+                    {summary.status === 'submitted' ? 'Data Available' : 'No Data'}
                   </Badge>
                 </div>
                 
                 <h3 className="text-lg font-bold text-gray-900 mb-1">{sectionLabel(summary.section)}</h3>
                 <p className="text-sm text-gray-500 mb-4">
                   {summary.status === 'submitted' 
-                    ? `Last updated ${new Date(summary.last_updated).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}` 
-                    : 'No records found for this date'}
+                    ? `Last activity: ${new Date(summary.last_updated).toLocaleDateString()} ${new Date(summary.last_updated).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}` 
+                    : 'No records found for this period'}
                 </p>
 
                 {summary.status === 'submitted' && (
-                  <div className="grid grid-cols-2 gap-2 text-sm">
-                    <div className="bg-gray-50 p-2 rounded border border-gray-100">
-                      <span className="block text-gray-400 text-xs uppercase tracking-wider">Entries</span>
-                      <span className="font-semibold text-gray-900">{summary.total_records}</span>
+                  <div className="grid grid-cols-3 gap-2 text-sm">
+                    <div className="bg-blue-50 p-2 rounded border border-blue-100 text-center">
+                      <span className="block text-blue-600 text-xs uppercase tracking-wider mb-1">In</span>
+                      <span className="font-bold text-blue-900">{summary.items_restocked}</span>
                     </div>
-                    <div className="bg-gray-50 p-2 rounded border border-gray-100">
-                      <span className="block text-gray-400 text-xs uppercase tracking-wider">Actions</span>
-                      <span className="font-semibold text-gray-900">
-                        {summary.items_restocked + summary.items_issued + summary.items_discarded}
-                      </span>
+                    <div className="bg-amber-50 p-2 rounded border border-amber-100 text-center">
+                      <span className="block text-amber-600 text-xs uppercase tracking-wider mb-1">Out</span>
+                      <span className="font-bold text-amber-900">{summary.items_issued}</span>
+                    </div>
+                    <div className="bg-red-50 p-2 rounded border border-red-100 text-center">
+                      <span className="block text-red-600 text-xs uppercase tracking-wider mb-1">Waste</span>
+                      <span className="font-bold text-red-900">{summary.items_discarded}</span>
                     </div>
                   </div>
                 )}
@@ -251,49 +352,103 @@ export default function Reports() {
       {expandedSection && (
         <Card className="overflow-hidden animate-in slide-in-from-top-4 duration-300">
           <div className="p-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center">
-             <h3 className="font-bold text-gray-900 flex items-center gap-2">
-               <span>{getSectionIcon(expandedSection)}</span>
-               {sectionLabel(expandedSection)} Report Details
-             </h3>
+             <div className="flex items-center gap-4">
+               <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                 <span>{getSectionIcon(expandedSection)}</span>
+                 {sectionLabel(expandedSection)} Details
+               </h3>
+               
+               <div className="flex bg-white rounded-md border border-gray-200 p-1">
+                 <button
+                   onClick={(e) => { e.stopPropagation(); setViewMode('list'); }}
+                   className={`px-3 py-1 text-xs font-medium rounded-sm flex items-center gap-1 transition-colors ${viewMode === 'list' ? 'bg-green-100 text-green-800' : 'text-gray-600 hover:bg-gray-50'}`}
+                 >
+                   <IconList className="w-3 h-3" /> Records
+                 </button>
+                 <button
+                   onClick={(e) => { e.stopPropagation(); setViewMode('breakdown'); }}
+                   className={`px-3 py-1 text-xs font-medium rounded-sm flex items-center gap-1 transition-colors ${viewMode === 'breakdown' ? 'bg-green-100 text-green-800' : 'text-gray-600 hover:bg-gray-50'}`}
+                 >
+                   <IconPieChart className="w-3 h-3" /> Breakdown
+                 </button>
+               </div>
+             </div>
              <Button size="sm" variant="ghost" onClick={() => setExpandedSection(null)}>Close</Button>
           </div>
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Time</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Item</TableHead>
-                  <TableHead className="text-right">Quantity</TableHead>
-                  <TableHead>Notes</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {details[expandedSection].length === 0 ? (
+          
+          <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+            {viewMode === 'list' ? (
+              <Table>
+                <TableHeader>
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center py-8 text-gray-500">
-                      No records found.
-                    </TableCell>
+                    <TableHead>Date & Time</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Item</TableHead>
+                    <TableHead className="text-right">Quantity</TableHead>
+                    <TableHead>Notes</TableHead>
                   </TableRow>
-                ) : (
-                  details[expandedSection].map((r) => (
-                    <TableRow key={r.id} className="hover:bg-gray-50">
-                      <TableCell className="font-mono text-gray-500 text-xs">
-                        {new Date(r.created_at).toLocaleTimeString()}
+                </TableHeader>
+                <TableBody>
+                  {details[expandedSection].length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center py-8 text-gray-500">
+                        No records found.
                       </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="font-normal text-xs">
-                          {r.type?.replace('stock_', '').replace(/_/g, ' ')}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="font-medium text-gray-900">{r.item_name}</TableCell>
-                      <TableCell className="text-right font-mono font-medium">{r.quantity}</TableCell>
-                      <TableCell className="text-gray-500 italic max-w-xs truncate">{r.notes || '—'}</TableCell>
                     </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+                  ) : (
+                    details[expandedSection].map((r) => (
+                      <TableRow key={r.id} className="hover:bg-gray-50">
+                        <TableCell className="font-mono text-gray-500 text-xs">
+                          {new Date(r.created_at).toLocaleDateString()} {new Date(r.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="font-normal text-xs">
+                            {r.type?.replace('stock_', '').replace(/_/g, ' ')}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="font-medium text-gray-900">{r.item_name}</TableCell>
+                        <TableCell className="text-right font-mono font-medium">{r.quantity}</TableCell>
+                        <TableCell className="text-gray-500 italic max-w-xs truncate">{r.notes || '—'}</TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Item Name</TableHead>
+                    <TableHead className="text-right text-blue-600">Total In (Restocked)</TableHead>
+                    <TableHead className="text-right text-amber-600">Total Out (Issued/Sold)</TableHead>
+                    <TableHead className="text-right text-red-600">Total Waste (Discarded)</TableHead>
+                    <TableHead className="text-right">Net Change</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {getBreakdown.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center py-8 text-gray-500">
+                        No data available for breakdown.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    getBreakdown.map((item) => (
+                      <TableRow key={item.name} className="hover:bg-gray-50">
+                        <TableCell className="font-medium text-gray-900">{item.name}</TableCell>
+                        <TableCell className="text-right font-mono text-blue-700 bg-blue-50/50">{item.restocked}</TableCell>
+                        <TableCell className="text-right font-mono text-amber-700 bg-amber-50/50">{item.issued}</TableCell>
+                        <TableCell className="text-right font-mono text-red-700 bg-red-50/50">{item.discarded}</TableCell>
+                        <TableCell className="text-right font-mono font-bold">
+                          {item.restocked - item.issued - item.discarded > 0 ? '+' : ''}
+                          {item.restocked - item.issued - item.discarded}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            )}
           </div>
         </Card>
       )}

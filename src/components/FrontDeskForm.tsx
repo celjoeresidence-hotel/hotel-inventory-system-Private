@@ -15,6 +15,7 @@ const toISODate = (d: Date) => d.toISOString().split('T')[0];
 interface RoomOption {
   id: string | number;
   room_number: string;
+  room_name?: string;
   price_per_night: number;
 }
 
@@ -92,7 +93,7 @@ export default function FrontDeskForm() {
       // Rooms
       const { data: roomData, error: roomErr } = await supabase
         .from('rooms')
-        .select('id, room_number, price_per_night, is_active')
+        .select('id, room_number, room_name, price_per_night, is_active')
         .eq('is_active', true)
         .order('room_number', { ascending: true });
       if (mounted) {
