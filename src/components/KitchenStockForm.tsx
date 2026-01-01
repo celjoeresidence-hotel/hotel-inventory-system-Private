@@ -1,8 +1,15 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../supabaseClient'
 import { useAuth } from '../context/AuthContext'
 import type { KitchenStockData } from '../types/kitchen'
 import InventoryConsumptionTable from './InventoryConsumptionTable'
+import { Card } from './ui/Card'
+import { Button } from './ui/Button'
+import { Input } from './ui/Input'
+import { SearchInput } from './ui/SearchInput'
+import { Select } from './ui/Select'
+import { Pagination } from './ui/Pagination'
+import { IconAlertCircle, IconCheckCircle, IconChefHat } from './ui/Icons'
 
 export default function KitchenStockForm() {
   const { role, session, isConfigured } = useAuth()
@@ -10,9 +17,14 @@ export default function KitchenStockForm() {
   // Role gating remains: screen is for kitchen staff
   if (role !== 'kitchen') {
     return (
-      <div style={{ maxWidth: 960, margin: '24px auto' }}>
-        <h2>Access denied</h2>
-        <p>You must be kitchen staff to submit daily stock records.</p>
+      <div className="flex flex-col items-center justify-center min-h-[60vh] p-6 animate-in fade-in">
+        <Card className="max-w-md w-full p-8 text-center border-error-light shadow-lg">
+        <div className="bg-error-light text-error w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+          <IconAlertCircle className="w-8 h-8" />
+        </div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h2>
+          <p className="text-gray-500">You must be logged in as kitchen staff to access this page.</p>
+        </Card>
       </div>
     )
   }
@@ -23,11 +35,35 @@ export default function KitchenStockForm() {
   const [loadingCategories, setLoadingCategories] = useState<boolean>(false)
   const [activeCategory, setActiveCategory] = useState<string>('')
 
+  // Search & Pagination
+  const [searchTerm, setSearchTerm] = useState('')
+  const [page, setPage] = useState(1)
+  const PAGE_SIZE = 10
+
   type UIItem = { item_name: string; unit: string | null; unit_price: number | null; opening_stock: number | null }
   const [items, setItems] = useState<UIItem[]>([])
-  const [, setLoadingItems] = useState<boolean>(false)
+  const [loadingItems, setLoadingItems] = useState<boolean>(false)
   const [restockedMap, setRestockedMap] = useState<Record<string, number>>({})
   const [soldMap, setSoldMap] = useState<Record<string, number>>({})
+  const [notesMap, setNotesMap] = useState<Record<string, string>>({})
+
+  // Reset pagination/search on category change
+  useEffect(() => {
+    setSearchTerm('')
+    setPage(1)
+  }, [activeCategory])
+
+  // Filtered & Paginated Items
+  const filteredItems = useMemo(() => {
+    if (!searchTerm) return items
+    const lower = searchTerm.toLowerCase()
+    return items.filter(it => it.item_name.toLowerCase().includes(lower))
+  }, [items, searchTerm])
+
+  const paginatedItems = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE
+    return filteredItems.slice(start, start + PAGE_SIZE)
+  }, [filteredItems, page])
 
   const [submitting, setSubmitting] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
@@ -154,23 +190,63 @@ export default function KitchenStockForm() {
           })).filter((it: any) => it.item_name)
         }
         enriched = enriched.sort((a: any, b: any) => a.item_name.localeCompare(b.item_name))
-        setItems(enriched)
-        const rmap: Record<string, number> = {}; const smap: Record<string, number> = {}
-        for (const it of enriched) { rmap[it.item_name] = 0; smap[it.item_name] = 0 }
+        
+        // Compute dynamic opening stock based on previous records
+        const computedItems: UIItem[] = [];
+        for (const it of enriched) {
+          const baseline = it.opening_stock ?? 0;
+          
+          // Fetch all Kitchen daily records for this item before current date
+          const { data: history } = await supabase
+            .from('operational_records')
+            .select('data, created_at')
+            .eq('entity_type', 'kitchen')
+            .eq('status', 'approved')
+            .is('deleted_at', null)
+            .filter('data->>item_name', 'eq', it.item_name)
+            .lt('data->>date', date); // Strictly before current date
+            
+          let sumRestocked = 0;
+          let sumSold = 0;
+          
+          if (history) {
+            for (const row of history) {
+               const r = Number(row.data?.restocked ?? 0);
+               const s = Number(row.data?.sold ?? 0);
+               sumRestocked += r;
+               sumSold += s;
+            }
+          }
+          
+          const calculatedOpening = Math.max(0, baseline + sumRestocked - sumSold);
+          computedItems.push({ ...it, opening_stock: calculatedOpening });
+        }
+        
+        setItems(computedItems)
+        const rmap: Record<string, number> = {}; const smap: Record<string, number> = {}; const nmap: Record<string, string> = {}
+        for (const it of computedItems) { 
+          rmap[it.item_name] = 0
+          smap[it.item_name] = 0
+          nmap[it.item_name] = ''
+        }
         setRestockedMap(rmap)
         setSoldMap(smap)
+        setNotesMap(nmap)
       } finally {
         setLoadingItems(false)
       }
     }
     fetchItems()
-  }, [isConfigured, session, activeCategory])
+  }, [isConfigured, session, activeCategory, date]) // Added date dependency so it recalculates when date changes
 
   const handleChangeRestocked = (name: string, value: number) => {
     setRestockedMap((prev) => ({ ...prev, [name]: Math.max(0, Number(value) || 0) }))
   }
   const handleChangeSold = (name: string, value: number) => {
     setSoldMap((prev) => ({ ...prev, [name]: Math.max(0, Number(value) || 0) }))
+  }
+  const handleChangeNotes = (name: string, value: string) => {
+    setNotesMap((prev) => ({ ...prev, [name]: value }))
   }
 
   const handleSubmit = async () => {
@@ -190,7 +266,9 @@ export default function KitchenStockForm() {
       const r = Number(restockedMap[row.item_name] ?? 0)
       const s = Number(soldMap[row.item_name] ?? 0)
       const u = Number(row.unit_price ?? 0)
-      if (r <= 0 && s <= 0) continue // only submit rows with non-zero activity
+      const n = notesMap[row.item_name]?.trim()
+
+      if (r <= 0 && s <= 0 && !n) continue
       if (s > o + r) { setError(`Sold for ${row.item_name} cannot exceed opening + restocked`); return }
       const closing = o + r - s
       if (closing < 0) { setError(`Closing stock for ${row.item_name} cannot be negative`); return }
@@ -204,11 +282,12 @@ export default function KitchenStockForm() {
         closing_stock: closing,
         unit_price: u,
         total_amount: total,
+        notes: n || undefined
       } as any
       records.push({ entity_type: 'kitchen', data: payload, financial_amount: total })
     }
     if (records.length === 0) {
-      setError('Enter restocked or sold quantities for at least one item.')
+      setError('Enter restocked or sold quantities (or notes) for at least one item.')
       return
     }
     try {
@@ -219,68 +298,150 @@ export default function KitchenStockForm() {
       // Reset inputs but keep date and current tab
       const r: Record<string, number> = {}
       const s: Record<string, number> = {}
-      for (const it of items) { r[it.item_name] = 0; s[it.item_name] = 0 }
+      const n: Record<string, string> = {}
+      for (const it of items) { r[it.item_name] = 0; s[it.item_name] = 0; n[it.item_name] = '' }
       setRestockedMap(r)
       setSoldMap(s)
+      setNotesMap(n)
+      
+      // Scroll to top
+      window.scrollTo({ top: 0, behavior: 'smooth' })
     } finally {
       setSubmitting(false)
     }
   }
 
   return (
-    <div style={{ maxWidth: 1100, margin: '24px auto' }}>
-      <h2>Kitchen — Daily Stock</h2>
-      <div style={{ display: 'grid', gap: 12, marginTop: 12 }}>
+    <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-500">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <label style={{ display: 'block', marginBottom: 6 }}>Date *</label>
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} disabled={submitting} style={{ padding: '8px 10px' }} />
-        </div>
-        <div>
-          <h3 style={{ margin: '12px 0' }}>Categories</h3>
-          {loadingCategories ? (
-            <div>Loading categories…</div>
-          ) : categories.length === 0 ? (
-            <div style={{ color: '#666' }}>No categories assigned to Kitchen. Ask an admin/manager/supervisor to assign categories in Inventory Setup.</div>
-          ) : (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {categories.map((c: { name: string; active: boolean }) => (
-                <button
-                  key={c.name}
-                  className="btn"
-                  style={{
-                    padding: '8px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #ddd',
-                    background: activeCategory === c.name ? '#004D40' : '#f7f7f7',
-                    color: activeCategory === c.name ? '#fff' : '#333',
-                    boxShadow: activeCategory === c.name ? '0 2px 6px rgba(0,0,0,0.15)' : 'none'
-                  }}
-                  onClick={() => setActiveCategory(c.name)}
-                >
-                  {c.name}
-                </button>
-              ))}
+          <h1 className="text-2xl font-bold text-gray-900 tracking-tight flex items-center gap-3">
+            <div className="p-2 bg-green-100 text-green-700 rounded-lg">
+              <IconChefHat className="w-6 h-6" />
             </div>
-          )}
+            Kitchen Daily Stock
+          </h1>
+          <p className="text-sm text-gray-500 mt-1 ml-12">Manage inventory usage and requests for the kitchen</p>
         </div>
-        <div>
-          <h3 style={{ margin: '12px 0' }}>{activeCategory || '—'} Items</h3>
-          <InventoryConsumptionTable
-            items={items}
-            restockedMap={restockedMap}
-            soldMap={soldMap}
+        <div className="w-full md:w-auto">
+          <Input
+            type="date"
+            label="Date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
             disabled={submitting}
-            onChangeRestocked={handleChangeRestocked}
-            onChangeSold={handleChangeSold}
+            className="w-full md:w-48"
           />
         </div>
-        <div>
-          <button onClick={handleSubmit} disabled={submitting || !activeCategory || items.length === 0} style={{ padding: '10px 14px' }}>
-            {submitting ? 'Submitting…' : 'Submit for Approval'}
-          </button>
-          {error && <div style={{ color: '#900', marginTop: 8 }}>{error}</div>}
-          {success && <div style={{ color: '#0a7f3b', marginTop: 8 }}>{success}</div>}
+      </div>
+
+      {error && (
+        <div className="bg-error-light border border-error-light text-error px-4 py-3 rounded-md flex items-start gap-3 animate-in slide-in-from-top-2">
+          <IconAlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+          <span className="text-sm">{error}</span>
         </div>
+      )}
+
+      {success && (
+        <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-md flex items-start gap-3 animate-in slide-in-from-top-2">
+          <IconCheckCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+          <span className="text-sm">{success}</span>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-6">
+        <Card className="p-0 overflow-hidden">
+          <div className="border-b border-gray-100 bg-gray-50/50 p-4">
+             <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Categories</h3>
+          </div>
+          <div className="p-4">
+            {loadingCategories ? (
+              <div className="flex gap-2 animate-pulse">
+                <div className="h-10 w-24 bg-gray-200 rounded-lg"></div>
+                <div className="h-10 w-24 bg-gray-200 rounded-lg"></div>
+                <div className="h-10 w-24 bg-gray-200 rounded-lg"></div>
+              </div>
+            ) : categories.length === 0 ? (
+              <div className="text-center py-6">
+                <p className="text-gray-500 text-sm italic">No categories assigned to Kitchen.</p>
+                <p className="text-xs text-gray-400 mt-1">Ask an admin or manager to assign categories to the Kitchen role.</p>
+              </div>
+            ) : (
+              <div className="max-w-md">
+                <Select
+                  value={activeCategory}
+                  onChange={(e) => setActiveCategory(e.target.value)}
+                  options={categories.map((c) => ({ value: c.name, label: c.name }))}
+                  placeholder="Select a category"
+                />
+              </div>
+            )}
+          </div>
+        </Card>
+
+        {activeCategory && (
+          <Card className="p-0 overflow-hidden animate-in slide-in-from-bottom-4 duration-500">
+            <div className="border-b border-gray-100 bg-gray-50/50 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <h3 className="text-lg font-medium text-gray-900">
+                  {activeCategory}
+                </h3>
+                <span className="text-gray-400 text-sm font-normal">Items</span>
+                <div className="text-xs font-medium px-2.5 py-0.5 rounded-full bg-gray-100 text-gray-600 ml-2">
+                  {filteredItems.length} items
+                </div>
+              </div>
+              <div className="w-full sm:w-64">
+                <SearchInput 
+                  value={searchTerm} 
+                  onChangeValue={setSearchTerm} 
+                  placeholder={`Search ${activeCategory}...`} 
+                />
+              </div>
+            </div>
+            
+            <div className="p-0 sm:p-4">
+              {loadingItems ? (
+                 <div className="p-8 text-center text-gray-500">
+                   <div className="w-8 h-8 border-2 border-green-600 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+                   Loading items...
+                 </div>
+              ) : (
+                <>
+                  <InventoryConsumptionTable
+                    items={paginatedItems}
+                    restockedMap={restockedMap}
+                    soldMap={soldMap}
+                    notesMap={notesMap}
+                    disabled={submitting}
+                    soldLabel="Consumed"
+                    onChangeRestocked={handleChangeRestocked}
+                    onChangeSold={handleChangeSold}
+                    onChangeNotes={handleChangeNotes}
+                  />
+                  <Pagination
+                    currentPage={page}
+                    totalPages={Math.ceil(filteredItems.length / PAGE_SIZE)}
+                    onPageChange={setPage}
+                    className="mt-4"
+                  />
+                </>
+              )}
+            </div>
+
+            <div className="p-4 bg-gray-50 border-t border-gray-100 flex justify-end">
+              <Button 
+                onClick={handleSubmit} 
+                disabled={submitting || items.length === 0}
+                isLoading={submitting}
+                size="lg"
+                className="w-full sm:w-auto shadow-sm"
+              >
+                Submit Daily Stock
+              </Button>
+            </div>
+          </Card>
+        )}
       </div>
     </div>
   )

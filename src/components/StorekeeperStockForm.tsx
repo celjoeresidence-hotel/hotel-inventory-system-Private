@@ -1,24 +1,46 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '../supabaseClient'
 import { useAuth } from '../context/AuthContext'
+import { Card } from './ui/Card'
+import { Button } from './ui/Button'
+import { Input } from './ui/Input'
+import { Select } from './ui/Select'
+import { 
+  IconAlertCircle, 
+  IconCheckCircle, 
+  IconClipboardList,
+  IconCoffee
+} from './ui/Icons'
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell
+} from './ui/Table'
+import InventoryConsumptionTable from './InventoryConsumptionTable'
+import { SearchInput } from './ui/SearchInput'
+import { Pagination } from './ui/Pagination'
+import { StaffSelect } from './ui/StaffSelect'
 
-type UIItem = { item_name: string; unit: string | null; opening_stock: number }
-type MonthlyRow = { item_name: string; unit: string | null; opening_month_start: number; total_restocked: number; total_issued: number; closing_month_end: number }
+type UIItem = { 
+  item_name: string; 
+  unit: string | null; 
+  opening_stock: number 
+}
+
+type MonthlyRow = { 
+  item_name: string; 
+  unit: string | null; 
+  opening_month_start: number; 
+  total_restocked: number; 
+  total_issued: number; 
+  closing_month_end: number 
+}
 
 export default function StorekeeperStockForm() {
   const { role, session, isConfigured } = useAuth()
-
-  if (role !== 'storekeeper') {
-    return (
-      <div style={{ maxWidth: 960, margin: '24px auto' }}>
-        <h2>Access denied</h2>
-        <p>You must be storekeeper staff to submit daily stock records.</p>
-      </div>
-    )
-  }
-
-  const [activeTab, setActiveTab] = useState<'daily' | 'monthly'>('daily')
-  const [date, setDate] = useState<string>(() => new Date().toISOString().slice(0, 10))
 
   // Categories and collections
   const [categories, setCategories] = useState<{ name: string; active: boolean }[]>([])
@@ -27,7 +49,11 @@ export default function StorekeeperStockForm() {
 
   const [collections, setCollections] = useState<string[]>([])
   const [selectedCollection, setSelectedCollection] = useState<string>('')
-  const [loadingCollections, setLoadingCollections] = useState<boolean>(false)
+
+  // Search & Pagination
+  const [searchTerm, setSearchTerm] = useState('')
+  const [page, setPage] = useState(1)
+  const PAGE_SIZE = 10
 
   // Items and per-item inputs
   const [items, setItems] = useState<UIItem[]>([])
@@ -39,6 +65,130 @@ export default function StorekeeperStockForm() {
   const [submitting, setSubmitting] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+
+  // Tabs and Date/Month state
+  const [activeTab, setActiveTab] = useState<'daily' | 'monthly' | 'history'>('daily')
+  const [date, setDate] = useState<string>(() => new Date().toISOString().slice(0, 10))
+  const [month, setMonth] = useState<string>(() => new Date().toISOString().slice(0, 7))
+  const [monthlyRows, setMonthlyRows] = useState<MonthlyRow[]>([])
+  const [loadingMonthly, setLoadingMonthly] = useState<boolean>(false)
+  const [historyRecords, setHistoryRecords] = useState<any[]>([])
+  const [loadingHistory, setLoadingHistory] = useState<boolean>(false)
+  const [staffName, setStaffName] = useState<string>('')
+
+  // Reset search/page on tab/collection change
+  useEffect(() => {
+    setSearchTerm('')
+    setPage(1)
+  }, [activeTab, selectedCollection])
+
+  // Filtered & Paginated Daily Items
+  const filteredItems = useMemo(() => {
+    if (!searchTerm) return items
+    const lower = searchTerm.toLowerCase()
+    return items.filter(it => it.item_name.toLowerCase().includes(lower))
+  }, [items, searchTerm])
+
+  const paginatedItems = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE
+    return filteredItems.slice(start, start + PAGE_SIZE)
+  }, [filteredItems, page])
+
+  // Filtered & Paginated Monthly Rows
+  const filteredMonthly = useMemo(() => {
+    if (!searchTerm) return monthlyRows
+    const lower = searchTerm.toLowerCase()
+    return monthlyRows.filter(r => r.item_name.toLowerCase().includes(lower))
+  }, [monthlyRows, searchTerm])
+
+  const paginatedMonthly = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE
+    return filteredMonthly.slice(start, start + PAGE_SIZE)
+  }, [filteredMonthly, page])
+
+  // Fetch History Records
+  useEffect(() => {
+    async function fetchHistory() {
+      if (activeTab !== 'history') return
+      setLoadingHistory(true)
+      setError(null)
+      try {
+        if (!isConfigured || !session || !supabase || !activeCategory) { setHistoryRecords([]); return }
+        
+        // 1. Get items in this category
+        let itemQ = supabase
+          .from('operational_records')
+          .select('data')
+          .eq('status', 'approved')
+          .is('deleted_at', null)
+          .filter('data->>type', 'eq', 'config_item')
+          .filter('data->>category', 'eq', activeCategory)
+          
+        if (selectedCollection) {
+          itemQ = itemQ.filter('data->>collection_name', 'eq', selectedCollection)
+        }
+        
+        const { data: itemData, error: itemError } = await itemQ
+        if (itemError) throw itemError
+        
+        const itemNames = (itemData ?? []).map((r: any) => r.data?.item_name).filter(Boolean)
+        
+        if (itemNames.length === 0) {
+          setHistoryRecords([])
+          return
+        }
+
+        const { data, error } = await supabase
+          .from('operational_records')
+          .select('id, data, created_at, status')
+          .eq('status', 'approved')
+          .is('deleted_at', null)
+          .eq('entity_type', 'storekeeper')
+          .in('data->>item_name', itemNames)
+          .order('created_at', { ascending: false })
+          .limit(200)
+          
+        if (error) throw error
+        
+        setHistoryRecords(data ?? [])
+      } catch (err: any) {
+        setError(err.message)
+      } finally {
+        setLoadingHistory(false)
+      }
+    }
+    fetchHistory()
+  }, [activeTab, activeCategory, selectedCollection, isConfigured, session])
+
+  // Filtered History
+  const filteredHistory = useMemo(() => {
+    if (!searchTerm) return historyRecords
+    const lower = searchTerm.toLowerCase()
+    return historyRecords.filter(r => 
+      (r.data?.item_name || '').toLowerCase().includes(lower) || 
+      (r.data?.staff_name || '').toLowerCase().includes(lower) ||
+      (r.data?.notes || '').toLowerCase().includes(lower)
+    )
+  }, [historyRecords, searchTerm])
+
+  const paginatedHistory = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE
+    return filteredHistory.slice(start, start + PAGE_SIZE)
+  }, [filteredHistory, page])
+
+  if (role !== 'storekeeper') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] p-6 animate-in fade-in">
+        <Card className="max-w-md w-full p-8 text-center border-error-light shadow-lg">
+          <div className="bg-error-light text-error w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+            <IconAlertCircle className="w-8 h-8" />
+          </div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h2>
+          <p className="text-gray-500">You must be storekeeper staff to access this page.</p>
+        </Card>
+      </div>
+    )
+  }
 
   // Fetch ALL approved categories (storekeeper sees everything)
   useEffect(() => {
@@ -83,74 +233,56 @@ export default function StorekeeperStockForm() {
   useEffect(() => {
     async function fetchCollections() {
       setError(null)
-      setLoadingCollections(true)
-      try {
-        if (!isConfigured || !session || !supabase || !activeCategory) { setCollections([]); setSelectedCollection(''); return }
-        const { data, error } = await supabase
-          .from('operational_records')
-          .select('id, data, original_id, version_no, created_at, status, deleted_at')
-          .eq('status', 'approved')
-          .is('deleted_at', null)
-          .filter('data->>type', 'eq', 'config_collection')
-          .filter('data->>category', 'eq', activeCategory)
-          .order('created_at', { ascending: false })
-        if (error) { setError(error.message); return }
-        const latestByOriginal = new Map<string, any>()
-        for (const r of (data ?? [])) {
-          const key = String((r as any)?.original_id ?? (r as any)?.id)
-          const prev = latestByOriginal.get(key)
-          const currVer = Number((r as any)?.version_no ?? 0)
-          const prevVer = Number((prev as any)?.version_no ?? -1)
-          const currTs = new Date((r as any)?.created_at ?? 0).getTime()
-          const prevTs = new Date((prev as any)?.created_at ?? 0).getTime()
-          if (!prev || currVer > prevVer || (currVer === prevVer && currTs > prevTs)) {
-            latestByOriginal.set(key, r)
-          }
+      if (!isConfigured || !session || !supabase || !activeCategory) { setCollections([]); setSelectedCollection(''); return }
+      const { data, error } = await supabase
+        .from('operational_records')
+        .select('id, data, original_id, version_no, created_at, status, deleted_at')
+        .eq('status', 'approved')
+        .is('deleted_at', null)
+        .filter('data->>type', 'eq', 'config_collection')
+        .filter('data->>category', 'eq', activeCategory)
+        .order('created_at', { ascending: false })
+      if (error) { setError(error.message); return }
+      const latestByOriginal = new Map<string, any>()
+      for (const r of (data ?? [])) {
+        const key = String((r as any)?.original_id ?? (r as any)?.id)
+        const prev = latestByOriginal.get(key)
+        const currVer = Number((r as any)?.version_no ?? 0)
+        const prevVer = Number((prev as any)?.version_no ?? -1)
+        const currTs = new Date((r as any)?.created_at ?? 0).getTime()
+        const prevTs = new Date((prev as any)?.created_at ?? 0).getTime()
+        if (!prev || currVer > prevVer || (currVer === prevVer && currTs > prevTs)) {
+          latestByOriginal.set(key, r)
         }
-        let cols = Array.from(latestByOriginal.values())
-          .map((r: any) => String(r?.data?.collection_name ?? ''))
-          .filter((c: any) => c)
-        cols = cols.filter((c: any, idx: number, arr: any[]) => arr.indexOf(c) === idx)
-        setCollections(cols)
-        if (!selectedCollection && cols.length > 0) setSelectedCollection(cols[0])
-      } finally { setLoadingCollections(false) }
+      }
+      let cols = Array.from(latestByOriginal.values())
+        .map((r: any) => String(r?.data?.collection_name ?? ''))
+        .filter((c: any) => c)
+      cols = cols.filter((c: any, idx: number, arr: any[]) => arr.indexOf(c) === idx)
+      setCollections(cols)
+      if (!selectedCollection && cols.length > 0) setSelectedCollection('')
     }
     fetchCollections()
   }, [isConfigured, session, activeCategory])
 
-  function prevDay(isoDate: string): string {
-    const d = new Date(isoDate)
-    d.setDate(d.getDate() - 1)
-    return d.toISOString().slice(0, 10)
-  }
+  // Helper to deduplicate records by original_id (taking latest version)
+  const dedupLatest = (rows: any[]) => {
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (const r of rows ?? []) {
+      const oid = String(r?.original_id ?? r?.id ?? '');
+      if (!oid) continue;
+      if (seen.has(oid)) continue;
+      seen.add(oid);
+      out.push(r);
+    }
+    return out;
+  };
 
   async function computeOpeningForItem(itemName: string, isoDate: string): Promise<number> {
     if (!supabase) return 0
-    const d1 = prevDay(isoDate)
-    // Sum restock for D-1
-    const { data: rsRows, error: rsErr } = await supabase
-      .from('operational_records')
-      .select('id, data, status, deleted_at')
-      .eq('status', 'approved')
-      .is('deleted_at', null)
-      .filter('data->>type', 'eq', 'stock_restock')
-      .filter('data->>item_name', 'eq', itemName)
-      .filter('data->>date', 'eq', d1)
-    if (rsErr) return 0
-    const totalRestock = (rsRows ?? []).reduce((sum: number, r: any) => sum + (typeof r?.data?.quantity === 'number' ? r.data.quantity : Number(r?.data?.quantity ?? 0)), 0)
-
-    const { data: isRows, error: isErr } = await supabase
-      .from('operational_records')
-      .select('id, data, status, deleted_at')
-      .eq('status', 'approved')
-      .is('deleted_at', null)
-      .filter('data->>type', 'eq', 'stock_issued')
-      .filter('data->>item_name', 'eq', itemName)
-      .filter('data->>date', 'eq', d1)
-    if (isErr) return 0
-    const totalIssued = (isRows ?? []).reduce((sum: number, r: any) => sum + (typeof r?.data?.quantity === 'number' ? r.data.quantity : Number(r?.data?.quantity ?? 0)), 0)
-
-    // Latest opening_stock
+    
+    // 1. Get latest opening_stock record
     const { data: osRows } = await supabase
       .from('operational_records')
       .select('id, data, status, created_at, deleted_at')
@@ -160,17 +292,46 @@ export default function StorekeeperStockForm() {
       .filter('data->>item_name', 'eq', itemName)
       .order('created_at', { ascending: false })
       .limit(1)
-    const openingD1 = osRows && osRows.length > 0 ? (typeof osRows[0]?.data?.quantity === 'number' ? osRows[0].data.quantity : Number(osRows[0]?.data?.quantity ?? 0)) : 0
+      
+    const baselineRecord = osRows && osRows.length > 0 ? osRows[0] : null
+    const baselineQty = baselineRecord ? (typeof baselineRecord.data?.quantity === 'number' ? baselineRecord.data.quantity : Number(baselineRecord.data?.quantity ?? 0)) : 0
+    const baselineDateStr = baselineRecord ? (baselineRecord.data?.date ?? baselineRecord.created_at) : '1970-01-01'
+    const baselineDate = new Date(baselineDateStr).toISOString().slice(0, 10)
 
-    if ((rsRows?.length ?? 0) > 0 || (isRows?.length ?? 0) > 0) {
-      return Math.max(0, openingD1 + totalRestock - totalIssued)
+    // 2. Fetch all transactions for this item (restock/issued)
+    const { data: txRows } = await supabase
+      .from('operational_records')
+      .select('id, data, original_id, version_no, created_at, status, deleted_at')
+      .eq('status', 'approved')
+      .is('deleted_at', null)
+      .in('data->>type', ['stock_restock', 'stock_issued'])
+      .filter('data->>item_name', 'eq', itemName)
+      .order('created_at', { ascending: false })
+
+    const uniqueTx = dedupLatest(txRows ?? [])
+    
+    let sumRestock = 0
+    let sumIssued = 0
+    
+    for (const tx of uniqueTx) {
+      const txDate = tx.data?.date ?? tx.created_at.slice(0, 10)
+      
+      // Only count transactions that are:
+      // 1. After or on the baseline date (if baseline exists)
+      // 2. Strictly BEFORE the current target date (isoDate)
+      if (txDate >= baselineDate && txDate < isoDate) {
+        const qty = Number(tx.data?.quantity ?? 0)
+        if (tx.data?.type === 'stock_restock') sumRestock += qty
+        else if (tx.data?.type === 'stock_issued') sumIssued += qty
+      }
     }
-    // Else latest opening stock
-    return openingD1
+
+    return Math.max(0, baselineQty + sumRestock - sumIssued)
   }
 
   // Fetch items and compute opening stock per item
   useEffect(() => {
+    if (activeTab !== 'daily') return
     async function fetchItems() {
       setError(null)
       setLoadingItems(true)
@@ -220,7 +381,7 @@ export default function StorekeeperStockForm() {
       } finally { setLoadingItems(false) }
     }
     fetchItems()
-  }, [isConfigured, session, activeCategory, selectedCollection, date])
+  }, [isConfigured, session, activeCategory, selectedCollection, date, activeTab])
 
   // Input handlers
   const handleChangeRestocked = (name: string, value: number) => {
@@ -236,6 +397,12 @@ export default function StorekeeperStockForm() {
   async function handleSubmit() {
     setError(null)
     setSuccess(null)
+    
+    if (!staffName) {
+      setError('Please select a staff member responsible for today.');
+      return;
+    }
+
     if (!isConfigured || !session || !supabase) { setError('Authentication required. Please sign in.'); return }
     if (!date) { setError('Date is required'); return }
     if (!activeCategory) { setError('Select a category'); return }
@@ -251,10 +418,10 @@ export default function StorekeeperStockForm() {
       if (i > opening + r) { setError(`Issued for ${row.item_name} cannot exceed opening + restocked`); return }
       if (closing < 0) { setError(`Closing stock for ${row.item_name} cannot be negative`); return }
       if (r > 0) {
-        records.push({ entity_type: 'storekeeper', data: { type: 'stock_restock', item_name: row.item_name, quantity: r, date, notes: note || undefined }, financial_amount: 0 })
+        records.push({ entity_type: 'storekeeper', data: { type: 'stock_restock', item_name: row.item_name, quantity: r, date, staff_name: staffName, notes: note || undefined }, financial_amount: 0 })
       }
       if (i > 0) {
-        records.push({ entity_type: 'storekeeper', data: { type: 'stock_issued', item_name: row.item_name, quantity: i, date, notes: note || undefined }, financial_amount: 0 })
+        records.push({ entity_type: 'storekeeper', data: { type: 'stock_issued', item_name: row.item_name, quantity: i, date, staff_name: staffName, notes: note || undefined }, financial_amount: 0 })
       }
     }
     if (records.length === 0) { setError('Enter restocked or issued quantities for at least one item.'); return }
@@ -267,13 +434,9 @@ export default function StorekeeperStockForm() {
       const rmap: Record<string, number> = {}; const imap: Record<string, number> = {}; const nmap: Record<string, string> = {}
       for (const it of items) { rmap[it.item_name] = 0; imap[it.item_name] = 0; nmap[it.item_name] = '' }
       setRestockedMap(rmap); setIssuedMap(imap); setNotesMap(nmap)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
     } finally { setSubmitting(false) }
   }
-
-  // Return moved to the end of component to ensure views are defined before rendering.
-  const [month, setMonth] = useState<string>(() => new Date().toISOString().slice(0, 7))
-  const [monthlyRows, setMonthlyRows] = useState<MonthlyRow[]>([])
-  const [loadingMonthly, setLoadingMonthly] = useState<boolean>(false)
 
   function getMonthRange(yyyyMM: string) {
     const [y, m] = yyyyMM.split('-').map((x) => Number(x))
@@ -326,7 +489,8 @@ export default function StorekeeperStockForm() {
         const rows: MonthlyRow[] = []
         for (const it of base) {
           if (!supabase) { rows.push({ item_name: it.item_name, unit: it.unit ?? null, opening_month_start: 0, total_restocked: 0, total_issued: 0, closing_month_end: 0 }); continue }
-          // Baseline: latest approved opening_stock
+          
+          // 1. Baseline: Latest approved opening_stock
           const { data: osRows } = await supabase
             .from('operational_records')
             .select('id, data, status, created_at, deleted_at')
@@ -336,305 +500,401 @@ export default function StorekeeperStockForm() {
             .filter('data->>item_name', 'eq', it.item_name)
             .order('created_at', { ascending: false })
             .limit(1)
-          const baseline = osRows && osRows.length > 0 ? (typeof osRows[0]?.data?.quantity === 'number' ? osRows[0].data.quantity : Number(osRows[0]?.data?.quantity ?? 0)) : 0
-  
-          // Previous month totals
-          const { data: prevRs } = await supabase
+            
+          const baselineRecord = osRows && osRows.length > 0 ? osRows[0] : null;
+          const baselineQty = baselineRecord ? (typeof baselineRecord.data?.quantity === 'number' ? baselineRecord.data.quantity : Number(baselineRecord.data?.quantity ?? 0)) : 0;
+          const baselineDateStr = baselineRecord ? (baselineRecord.data?.date ?? baselineRecord.created_at) : '1970-01-01';
+          const baselineDate = new Date(baselineDateStr).toISOString().slice(0, 10);
+
+          // 2. Fetch ALL transactions after baseline
+          const { data: txRows } = await supabase
             .from('operational_records')
-            .select('id, data, status, deleted_at')
+            .select('id, data, original_id, version_no, created_at, status, deleted_at')
             .eq('status', 'approved')
             .is('deleted_at', null)
-            .filter('data->>type', 'eq', 'stock_restock')
+            .in('data->>type', ['stock_restock', 'stock_issued'])
             .filter('data->>item_name', 'eq', it.item_name)
-            .filter('data->>date', 'gte', range.prevStart)
-            .filter('data->>date', 'lte', range.prevEnd)
-          const prevRestock = (prevRs ?? []).reduce((sum: number, r: any) => sum + (typeof r?.data?.quantity === 'number' ? r.data.quantity : Number(r?.data?.quantity ?? 0)), 0)
-  
-          const { data: prevIs } = await supabase
-            .from('operational_records')
-            .select('id, data, status, deleted_at')
-            .eq('status', 'approved')
-            .is('deleted_at', null)
-            .filter('data->>type', 'eq', 'stock_issued')
-            .filter('data->>item_name', 'eq', it.item_name)
-            .filter('data->>date', 'gte', range.prevStart)
-            .filter('data->>date', 'lte', range.prevEnd)
-          const prevIssued = (prevIs ?? []).reduce((sum: number, r: any) => sum + (typeof r?.data?.quantity === 'number' ? r.data.quantity : Number(r?.data?.quantity ?? 0)), 0)
-  
-          const openingMonthStart = (prevRestock + prevIssued) > 0 ? Math.max(0, baseline + prevRestock - prevIssued) : baseline
-  
-          // Current month totals
-          const { data: currRs } = await supabase
-            .from('operational_records')
-            .select('id, data, status, deleted_at')
-            .eq('status', 'approved')
-            .is('deleted_at', null)
-            .filter('data->>type', 'eq', 'stock_restock')
-            .filter('data->>item_name', 'eq', it.item_name)
-            .filter('data->>date', 'gte', range.start)
-            .filter('data->>date', 'lte', range.end)
-          const totalRestocked = (currRs ?? []).reduce((sum: number, r: any) => sum + (typeof r?.data?.quantity === 'number' ? r.data.quantity : Number(r?.data?.quantity ?? 0)), 0)
-  
-          const { data: currIs } = await supabase
-            .from('operational_records')
-            .select('id, data, status, deleted_at')
-            .eq('status', 'approved')
-            .is('deleted_at', null)
-            .filter('data->>type', 'eq', 'stock_issued')
-            .filter('data->>item_name', 'eq', it.item_name)
-            .filter('data->>date', 'gte', range.start)
-            .filter('data->>date', 'lte', range.end)
-          const totalIssued = (currIs ?? []).reduce((sum: number, r: any) => sum + (typeof r?.data?.quantity === 'number' ? r.data.quantity : Number(r?.data?.quantity ?? 0)), 0)
-  
-          const closingMonthEnd = Math.max(0, openingMonthStart + totalRestocked - totalIssued)
-  
-          rows.push({ item_name: it.item_name, unit: it.unit ?? null, opening_month_start: openingMonthStart, total_restocked: totalRestocked, total_issued: totalIssued, closing_month_end: closingMonthEnd })
+            .order('created_at', { ascending: false })
+          
+          const uniqueTx = dedupLatest(txRows ?? [])
+
+          let preMonthRestock = 0;
+          let preMonthIssued = 0;
+          let inMonthRestock = 0;
+          let inMonthIssued = 0;
+
+          const startIso = range.start;
+          const endIso = range.end;
+
+          for (const tx of uniqueTx) {
+            const txDate = tx.data?.date ?? tx.created_at.slice(0, 10);
+            if (txDate < baselineDate) continue; // Ignore transactions before baseline
+
+            const qty = Number(tx.data?.quantity ?? 0);
+            const type = tx.data?.type;
+
+            if (txDate < startIso) {
+              // Pre-month
+              if (type === 'stock_restock') preMonthRestock += qty;
+              else if (type === 'stock_issued') preMonthIssued += qty;
+            } else if (txDate >= startIso && txDate <= endIso) {
+              // In-month
+              if (type === 'stock_restock') inMonthRestock += qty;
+              else if (type === 'stock_issued') inMonthIssued += qty;
+            }
+          }
+
+          const openingMonthStart = Math.max(0, baselineQty + preMonthRestock - preMonthIssued);
+          const closingMonthEnd = Math.max(0, openingMonthStart + inMonthRestock - inMonthIssued);
+
+          rows.push({ 
+            item_name: it.item_name, 
+            unit: it.unit ?? null, 
+            opening_month_start: openingMonthStart, 
+            total_restocked: inMonthRestock, 
+            total_issued: inMonthIssued, 
+            closing_month_end: closingMonthEnd 
+          })
         }
-        // Sort rows by item name
         rows.sort((a, b) => a.item_name.localeCompare(b.item_name))
         setMonthlyRows(rows)
       } finally { setLoadingMonthly(false) }
     }
     computeMonthly()
-  }, [activeTab, isConfigured, session, activeCategory, selectedCollection, month])
-
-  const monthlyView = (
-    <div style={{ marginTop: 12, display: 'grid', gap: 12 }}>
-      <div>
-        <label style={{ display: 'block', marginBottom: 6 }}>Month *</label>
-        <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={{ padding: '8px 10px' }} />
-      </div>
-      <div>
-        <h3 style={{ margin: '12px 0' }}>Categories</h3>
-        {loadingCategories ? (
-          <div>Loading categories…</div>
-        ) : categories.length === 0 ? (
-          <div style={{ color: '#666' }}>No categories found. Please configure categories in Inventory Setup.</div>
-        ) : (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {categories.map((c) => (
-              <button
-                key={c.name}
-                className="btn"
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: 8,
-                  border: '1px solid #ddd',
-                  background: activeCategory === c.name ? '#004D40' : '#f7f7f7',
-                  color: activeCategory === c.name ? '#fff' : '#333',
-                  boxShadow: activeCategory === c.name ? '0 2px 6px rgba(0,0,0,0.15)' : 'none'
-                }}
-                onClick={() => setActiveCategory(c.name)}
-              >
-                {c.name}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-      <div>
-        <h3 style={{ margin: '12px 0' }}>Collection (optional)</h3>
-        {loadingCollections ? (
-          <div>Loading collections…</div>
-        ) : collections.length === 0 ? (
-          <div style={{ color: '#666' }}>No collections for this category.</div>
-        ) : (
-          <select value={selectedCollection} onChange={(e) => setSelectedCollection(e.target.value)} style={{ padding: '8px 10px' }} disabled={loadingCollections}>
-            {collections.map((name) => (
-              <option key={name} value={name}>{name}</option>
-            ))}
-          </select>
-        )}
-      </div>
-      <div>
-        <h3 style={{ margin: '12px 0' }}>Monthly Summary — {month}</h3>
-        {loadingMonthly ? (
-          <div>Computing monthly summary…</div>
-        ) : monthlyRows.length === 0 ? (
-          <div style={{ color: '#666' }}>No items found for the selected filters.</div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '8px' }}>Item</th>
-                  <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '8px' }}>Unit</th>
-                  <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: '8px' }}>Opening (Month Start)</th>
-                  <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: '8px' }}>Total Restocked</th>
-                  <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: '8px' }}>Total Issued</th>
-                  <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: '8px' }}>Closing (Month End)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {monthlyRows.map((row) => (
-                  <tr key={row.item_name}>
-                    <td style={{ borderBottom: '1px solid #eee', padding: '8px' }}>{row.item_name}</td>
-                    <td style={{ borderBottom: '1px solid #eee', padding: '8px' }}>{row.unit ?? '—'}</td>
-                    <td style={{ borderBottom: '1px solid #eee', padding: '8px', textAlign: 'right' }}>{row.opening_month_start}</td>
-                    <td style={{ borderBottom: '1px solid #eee', padding: '8px', textAlign: 'right' }}>{row.total_restocked}</td>
-                    <td style={{ borderBottom: '1px solid #eee', padding: '8px', textAlign: 'right' }}>{row.total_issued}</td>
-                    <td style={{ borderBottom: '1px solid #eee', padding: '8px', textAlign: 'right' }}>{row.closing_month_end}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-
-  const dailyView = (
-    <div style={{ marginTop: 12, display: 'grid', gap: 12 }}>
-      {error && (
-        <div style={{ background: '#ffefef', color: '#b00020', padding: '8px 12px', borderRadius: 8 }}>{error}</div>
-      )}
-      {success && (
-        <div style={{ background: '#eafbea', color: '#0b7a0b', padding: '8px 12px', borderRadius: 8 }}>{success}</div>
-      )}
-      <div>
-        <label style={{ display: 'block', marginBottom: 6 }}>Date *</label>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ padding: '8px 10px' }} />
-      </div>
-      <div>
-        <h3 style={{ margin: '12px 0' }}>Categories</h3>
-        {loadingCategories ? (
-          <div>Loading categories…</div>
-        ) : categories.length === 0 ? (
-          <div style={{ color: '#666' }}>No categories found. Please configure categories in Inventory Setup.</div>
-        ) : (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {categories.map((c) => (
-              <button
-                key={c.name}
-                className="btn"
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: 8,
-                  border: '1px solid #ddd',
-                  background: activeCategory === c.name ? '#004D40' : '#f7f7f7',
-                  color: activeCategory === c.name ? '#fff' : '#333',
-                  boxShadow: activeCategory === c.name ? '0 2px 6px rgba(0,0,0,0.15)' : 'none'
-                }}
-                onClick={() => setActiveCategory(c.name)}
-              >
-                {c.name}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-      <div>
-        <h3 style={{ margin: '12px 0' }}>Collection (optional)</h3>
-        {loadingCollections ? (
-          <div>Loading collections…</div>
-        ) : collections.length === 0 ? (
-          <div style={{ color: '#666' }}>No collections for this category.</div>
-        ) : (
-          <select value={selectedCollection} onChange={(e) => setSelectedCollection(e.target.value)} style={{ padding: '8px 10px' }} disabled={loadingCollections}>
-            {collections.map((name) => (
-              <option key={name} value={name}>{name}</option>
-            ))}
-          </select>
-        )}
-      </div>
-      <div>
-        <h3 style={{ margin: '12px 0' }}>Daily Stock — {date}</h3>
-        {loadingItems ? (
-          <div>Loading items…</div>
-        ) : items.length === 0 ? (
-          <div style={{ color: '#666' }}>No items found for the selected filters.</div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '8px' }}>Item</th>
-                  <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '8px' }}>Unit</th>
-                  <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: '8px' }}>Opening Stock</th>
-                  <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: '8px' }}>Quantity Re-Stock</th>
-                  <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: '8px' }}>Quantity Issued</th>
-                  <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '8px' }}>Notes</th>
-                  <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: '8px' }}>Closing Stock</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((row) => {
-                  const o = Number(row.opening_stock ?? 0)
-                  const r = Number(restockedMap[row.item_name] ?? 0)
-                  const i = Number(issuedMap[row.item_name] ?? 0)
-                  const closing = o + r - i
-                  return (
-                    <tr key={row.item_name}>
-                      <td style={{ borderBottom: '1px solid #eee', padding: '8px' }}>{row.item_name}</td>
-                      <td style={{ borderBottom: '1px solid #eee', padding: '8px' }}>{row.unit ?? '—'}</td>
-                      <td style={{ borderBottom: '1px solid #eee', padding: '8px', textAlign: 'right' }}>{Number.isFinite(o) ? o : '—'}</td>
-                      <td style={{ borderBottom: '1px solid #eee', padding: '8px', textAlign: 'right' }}>
-                        <input
-                          type="number"
-                          min={0}
-                          step={1}
-                          value={r}
-                          onChange={(e) => handleChangeRestocked(row.item_name, Number(e.target.value))}
-                          disabled={submitting}
-                          style={{ width: 120 }}
-                        />
-                      </td>
-                      <td style={{ borderBottom: '1px solid #eee', padding: '8px', textAlign: 'right' }}>
-                        <input
-                          type="number"
-                          min={0}
-                          step={1}
-                          value={i}
-                          onChange={(e) => handleChangeIssued(row.item_name, Number(e.target.value))}
-                          disabled={submitting}
-                          style={{ width: 120 }}
-                        />
-                      </td>
-                      <td style={{ borderBottom: '1px solid #eee', padding: '8px', textAlign: 'left' }}>
-                        <input
-                          type="text"
-                          value={notesMap[row.item_name] ?? ''}
-                          onChange={(e) => handleChangeNotes(row.item_name, e.target.value)}
-                          disabled={submitting}
-                          style={{ width: 220 }}
-                        />
-                      </td>
-                      <td style={{ borderBottom: '1px solid #eee', padding: '8px', textAlign: 'right' }}>{closing}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-      <div>
-        <button onClick={handleSubmit} disabled={submitting || !activeCategory || items.length === 0} style={{ padding: '10px 14px' }}>
-          {submitting ? 'Submitting…' : 'Submit for Approval'}
-        </button>
-      </div>
-    </div>
-  )
+  }, [isConfigured, session, activeCategory, selectedCollection, month, activeTab])
 
   return (
-    <div style={{ maxWidth: 1100, margin: '24px auto' }}>
-      <h2>Storekeeper — Stock</h2>
-      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-        <button
-          onClick={() => setActiveTab('daily')}
-          style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #ddd', background: activeTab === 'daily' ? '#004D40' : '#f7f7f7', color: activeTab === 'daily' ? '#fff' : '#333' }}
-        >
-          Daily Stock
-        </button>
-        <button
-          onClick={() => setActiveTab('monthly')}
-          style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #ddd', background: activeTab === 'monthly' ? '#004D40' : '#f7f7f7', color: activeTab === 'monthly' ? '#fff' : '#333' }}
-        >
-          Monthly Summary
-        </button>
+    <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-500">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 tracking-tight flex items-center gap-3">
+            <div className="p-2 bg-green-100 text-green-700 rounded-lg">
+              <IconClipboardList className="w-6 h-6" />
+            </div>
+            Storekeeper Stock
+          </h1>
+          <p className="text-sm text-gray-500 mt-1 ml-12">Manage inventory intake and issuance</p>
+        </div>
+        
+        <div className="flex flex-col sm:flex-row items-center gap-3">
+          {activeTab === 'daily' && (
+            <div className="w-full sm:w-48">
+              <StaffSelect
+                role="storekeeper"
+                value={staffName}
+                onChange={setStaffName}
+                disabled={submitting}
+              />
+            </div>
+          )}
+          {/* Tabs and Date Pickers */}
+          <div className="flex items-center gap-4 bg-white p-1 rounded-lg border border-gray-200 shadow-sm w-full sm:w-auto">
+             <div className="flex bg-gray-100 p-1 rounded-md">
+               <button
+                 onClick={() => setActiveTab('daily')}
+                 className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${activeTab === 'daily' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
+               >
+                 Daily
+               </button>
+               <button
+                 onClick={() => setActiveTab('monthly')}
+                 className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${activeTab === 'monthly' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
+               >
+                 Monthly
+               </button>
+               <button
+                 onClick={() => setActiveTab('history')}
+                 className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${activeTab === 'history' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
+               >
+                 History
+               </button>
+             </div>
+             {activeTab !== 'history' && <div className="h-6 w-px bg-gray-200"></div>}
+             {activeTab === 'daily' ? (
+               <Input
+                 type="date"
+                 value={date}
+                 onChange={(e) => setDate(e.target.value)}
+                 className="border-none bg-transparent shadow-none p-0 h-auto focus:ring-0 w-36"
+               />
+             ) : activeTab === 'monthly' ? (
+               <Input
+                 type="month"
+                 value={month}
+                 onChange={(e) => setMonth(e.target.value)}
+                 className="border-none bg-transparent shadow-none p-0 h-auto focus:ring-0 w-36"
+               />
+             ) : null}
+          </div>
+        </div>
       </div>
-      {activeTab === 'daily' ? dailyView : monthlyView}
+
+      {error && (
+        <div className="bg-error-light border border-error-light text-error px-4 py-3 rounded-md flex items-start gap-3 animate-in slide-in-from-top-2">
+          <IconAlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+          <span className="text-sm">{error}</span>
+        </div>
+      )}
+
+      {success && (
+        <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-md flex items-start gap-3 animate-in slide-in-from-top-2">
+          <IconCheckCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+          <span className="text-sm">{success}</span>
+        </div>
+      )}
+
+      {/* Categories Bar */}
+      <Card className="p-0 overflow-hidden">
+        <div className="border-b border-gray-100 bg-gray-50/50 p-4">
+           <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Categories</h3>
+        </div>
+        <div className="p-4">
+          {loadingCategories ? (
+            <div className="flex gap-2 animate-pulse">
+              <div className="h-10 w-24 bg-gray-200 rounded-lg"></div>
+              <div className="h-10 w-24 bg-gray-200 rounded-lg"></div>
+              <div className="h-10 w-24 bg-gray-200 rounded-lg"></div>
+            </div>
+          ) : categories.length === 0 ? (
+            <div className="text-center py-6">
+              <p className="text-gray-500 text-sm italic">No categories found.</p>
+            </div>
+          ) : (
+            <div className="flex overflow-x-auto pb-2 gap-2 snap-x hide-scrollbar">
+              {categories.map((c) => (
+                <button
+                  key={c.name}
+                  onClick={() => setActiveCategory(c.name)}
+                  className={`
+                    flex-shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 snap-start whitespace-nowrap border
+                    ${activeCategory === c.name 
+                      ? 'bg-green-50 border-green-200 text-green-700 ring-1 ring-green-500/20 shadow-sm' 
+                      : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                    }
+                  `}
+                >
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        
+        {/* Collection Filter (Optional) */}
+        {collections.length > 0 && (
+           <div className="px-4 pb-4 animate-in fade-in slide-in-from-top-2">
+             <div className="max-w-xs">
+               <Select
+                 value={selectedCollection}
+                 onChange={(e) => setSelectedCollection(e.target.value)}
+                 className="w-full text-sm"
+               >
+                 <option value="">All Collections</option>
+                 {collections.map((col) => (
+                   <option key={col} value={col}>{col}</option>
+                 ))}
+               </Select>
+             </div>
+           </div>
+        )}
+      </Card>
+
+      {/* Main Content Area */}
+      {activeCategory && (
+        <Card className="p-0 overflow-hidden animate-in slide-in-from-bottom-4 duration-500">
+          <div className="border-b border-gray-100 bg-gray-50/50 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <h3 className="text-lg font-medium text-gray-900 flex items-center gap-2">
+                {activeCategory}
+                <span className="text-gray-400 text-sm font-normal">
+                  {activeTab === 'daily' ? 'Daily Entry' : 'Monthly Overview'}
+                </span>
+              </h3>
+              <div className="text-xs font-medium px-2.5 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                 {activeTab === 'daily' ? `${items.length} items` : `${monthlyRows.length} items`}
+              </div>
+            </div>
+            
+            <div className="w-full sm:w-64">
+              <SearchInput 
+                value={searchTerm} 
+                onChangeValue={setSearchTerm} 
+                placeholder={`Search ${selectedCollection || activeCategory}...`} 
+              />
+            </div>
+          </div>
+          
+          <div className="p-0 sm:p-4">
+            {(activeTab === 'daily' ? loadingItems : activeTab === 'monthly' ? loadingMonthly : loadingHistory) ? (
+               <div className="p-12 text-center text-gray-500">
+                 <div className="w-8 h-8 border-2 border-green-600 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+                 Loading data...
+               </div>
+            ) : activeTab === 'daily' ? (
+              // DAILY TABLE
+              <>
+                <div className="overflow-x-auto border rounded-lg shadow-sm bg-white">
+                  <InventoryConsumptionTable
+                    items={paginatedItems.map(i => ({ ...i, unit_price: null, opening_stock: i.opening_stock }))}
+                    restockedMap={restockedMap}
+                    soldMap={issuedMap}
+                    notesMap={notesMap}
+                    disabled={submitting}
+                    soldLabel="Issued"
+                    onChangeRestocked={handleChangeRestocked}
+                    onChangeSold={handleChangeIssued}
+                    onChangeNotes={handleChangeNotes}
+                  />
+                </div>
+
+                {filteredItems.length === 0 && (
+                  <div className="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200 m-4">
+                    <IconCoffee className="w-12 h-12 mx-auto text-gray-300 mb-3" />
+                    <h3 className="text-lg font-medium text-gray-900">No items found</h3>
+                    <p className="text-gray-500">Try adjusting your search terms</p>
+                  </div>
+                )}
+
+                <div className="mt-4 flex justify-center pb-4">
+                  <Pagination
+                    currentPage={page}
+                    totalPages={Math.ceil(filteredItems.length / PAGE_SIZE)}
+                    onPageChange={setPage}
+                  />
+                </div>
+              </>
+            ) : activeTab === 'monthly' ? (
+              // MONTHLY TABLE
+              <>
+                <div className="overflow-x-auto border rounded-lg shadow-sm bg-white">
+                  <Table>
+                    <TableHeader className="bg-gray-50">
+                      <TableRow>
+                        <TableHead className="w-[200px] sticky left-0 bg-gray-50 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">Item</TableHead>
+                        <TableHead>Unit</TableHead>
+                        <TableHead className="text-right">Open ({month}-01)</TableHead>
+                        <TableHead className="text-right">Total Restocked</TableHead>
+                        <TableHead className="text-right">Total Issued</TableHead>
+                        <TableHead className="text-right">Close (End)</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {paginatedMonthly.map((row) => (
+                        <TableRow key={row.item_name} className="hover:bg-gray-50 group">
+                          <TableCell className="font-medium text-gray-900 sticky left-0 bg-white group-hover:bg-gray-50 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
+                            {row.item_name}
+                          </TableCell>
+                          <TableCell className="text-gray-500">{row.unit ?? '—'}</TableCell>
+                          <TableCell className="text-right font-mono text-gray-600">{row.opening_month_start}</TableCell>
+                          <TableCell className="text-right font-mono text-green-600 font-medium">+{row.total_restocked}</TableCell>
+                          <TableCell className="text-right font-mono text-error font-medium">-{row.total_issued}</TableCell>
+                          <TableCell className="text-right font-mono font-bold text-gray-900">{row.closing_month_end}</TableCell>
+                        </TableRow>
+                      ))}
+                      {paginatedMonthly.length === 0 && (
+                         <TableRow>
+                           <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+                             No records found for this month.
+                           </TableCell>
+                         </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+                
+                <div className="mt-4 flex justify-center pb-4">
+                  <Pagination
+                    currentPage={page}
+                    totalPages={Math.ceil(filteredMonthly.length / PAGE_SIZE)}
+                    onPageChange={setPage}
+                  />
+                </div>
+              </>
+            ) : (
+              // HISTORY TABLE
+              <>
+                <div className="overflow-x-auto border rounded-lg shadow-sm bg-white">
+                  <Table>
+                    <TableHeader className="bg-gray-50">
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Item</TableHead>
+                        <TableHead>Action</TableHead>
+                        <TableHead className="text-right">Quantity</TableHead>
+                        <TableHead>Staff</TableHead>
+                        <TableHead>Notes</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {paginatedHistory.map((r) => {
+                        const type = r.data?.type
+                        const isRestock = type === 'stock_restock'
+                        return (
+                          <TableRow key={r.id} className="hover:bg-gray-50">
+                            <TableCell className="text-sm text-gray-600 whitespace-nowrap">
+                              {r.data?.date || new Date(r.created_at).toLocaleDateString()}
+                            </TableCell>
+                            <TableCell className="font-medium text-gray-900">
+                              {r.data?.item_name}
+                            </TableCell>
+                            <TableCell>
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                                isRestock ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                              }`}>
+                                {isRestock ? 'Restock' : 'Issued'}
+                              </span>
+                            </TableCell>
+                            <TableCell className={`text-right font-mono font-medium ${
+                              isRestock ? 'text-green-600' : 'text-error'
+                            }`}>
+                              {isRestock ? '+' : '-'}{r.data?.quantity}
+                            </TableCell>
+                            <TableCell className="text-sm text-gray-500">
+                              {r.data?.staff_name || '—'}
+                            </TableCell>
+                            <TableCell className="text-sm text-gray-500 max-w-[200px] truncate">
+                              {r.data?.notes || '—'}
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })}
+                      {paginatedHistory.length === 0 && (
+                         <TableRow>
+                           <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+                             No history records found.
+                           </TableCell>
+                         </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+                
+                <div className="mt-4 flex justify-center pb-4">
+                  <Pagination
+                    currentPage={page}
+                    totalPages={Math.ceil(filteredHistory.length / PAGE_SIZE)}
+                    onPageChange={setPage}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+
+          {activeTab === 'daily' && items.length > 0 && (
+            <div className="p-4 bg-gray-50 border-t border-gray-100 flex justify-end">
+              <Button 
+                onClick={handleSubmit} 
+                disabled={submitting}
+                isLoading={submitting}
+                size="lg"
+                className="w-full sm:w-auto shadow-sm"
+              >
+                Submit Daily Stock
+              </Button>
+            </div>
+          )}
+        </Card>
+      )}
     </div>
   )
 }

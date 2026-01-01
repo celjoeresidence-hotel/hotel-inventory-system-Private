@@ -3,6 +3,11 @@ import { isSupabaseConfigured, supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 import type { FrontDeskRecordData, PaymentMethod, PaymentType } from '../types/frontDesk';
 import { validateFrontDeskData } from '../utils/frontDeskValidation';
+import { Card } from './ui/Card';
+import { Button } from './ui/Button';
+import { Input } from './ui/Input';
+import { Select } from './ui/Select';
+import { IconCheckCircle, IconAlertCircle, IconCalendar, IconUser, IconCreditCard, IconChevronRight, IconChevronLeft, IconBed, IconFileText } from './ui/Icons';
 
 // Helper to format ISO date (YYYY-MM-DD)
 const toISODate = (d: Date) => d.toISOString().split('T')[0];
@@ -70,7 +75,6 @@ export default function FrontDeskForm() {
   const [notes, setNotes] = useState<string | null>('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // const [success, setSuccess] = useState<string | null>(null);
 
   const created_at_local = useMemo(() => new Date().toISOString(), []);
 
@@ -170,7 +174,6 @@ export default function FrontDeskForm() {
     e.preventDefault();
     if (locked) return;
     setError(null);
-// (line removed – setSuccess is not declared in this component)
 
     if (!isSupabaseConfigured || !supabase) {
       setError('Supabase is not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.');
@@ -266,199 +269,378 @@ export default function FrontDeskForm() {
   const isStaffDropdownDisabled = role === 'front_desk' && Boolean(staffId);
 
   return (
-    <div className="fd-form" style={{ maxWidth: 900, margin: '24px auto', textAlign: 'left', fontFamily: 'Montserrat, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, sans-serif' }}>
+    <div className="max-w-5xl mx-auto font-sans text-left p-4 md:p-6">
+      <div className="flex items-center space-x-3 mb-6">
+        <div className="bg-green-50 p-2 rounded-lg">
+          <IconCalendar className="w-6 h-6 text-green-600" />
+        </div>
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">Check-In Guest</h2>
+          <p className="text-gray-500 text-sm">Process a new guest arrival</p>
+        </div>
+      </div>
+
       {!locked ? (
-        <form onSubmit={handleSubmit}>
-          <h2 style={{ marginBottom: 8 }}>Front Desk Room Booking</h2>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-            <span style={{ padding: '6px 10px', borderRadius: 999, background: step === 1 ? '#1B5E20' : '#eee', color: step === 1 ? '#fff' : '#333' }}>Step 1: Room Booking</span>
-            <span style={{ padding: '6px 10px', borderRadius: 999, background: step === 2 ? '#1B5E20' : '#eee', color: step === 2 ? '#fff' : '#333' }}>Step 2: Guest & Payment</span>
+        <form onSubmit={handleSubmit} className="space-y-6">
+          {/* Progress Steps */}
+          <div className="flex items-center justify-center mb-8">
+            <div className={`flex items-center gap-3 transition-colors duration-300 ${step === 1 ? 'text-green-600' : 'text-gray-400'}`}>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center border-2 text-sm font-bold transition-all duration-300 ${step === 1 ? 'border-green-600 bg-green-600 text-white shadow-md' : 'border-gray-300 bg-white text-gray-500'}`}>
+                1
+              </div>
+              <span className="font-medium">Room & Stay</span>
+            </div>
+            <div className="w-24 h-0.5 bg-gray-200 mx-4 relative">
+              <div className={`absolute left-0 top-0 h-full bg-green-600 transition-all duration-500 ${step === 2 ? 'w-full' : 'w-0'}`} />
+            </div>
+            <div className={`flex items-center gap-3 transition-colors duration-300 ${step === 2 ? 'text-green-600' : 'text-gray-400'}`}>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center border-2 text-sm font-bold transition-all duration-300 ${step === 2 ? 'border-green-600 bg-green-600 text-white shadow-md' : 'border-gray-300 bg-white text-gray-500'}`}>
+                2
+              </div>
+              <span className="font-medium">Guest & Payment</span>
+            </div>
           </div>
 
           {error && (
-            <div style={{ background: '#ffe5e5', color: '#900', padding: '8px 12px', borderRadius: 6, marginBottom: 12 }}>
-              <strong>Error:</strong>
-              <div style={{ whiteSpace: 'pre-wrap' }}>{error}</div>
+            <div className="bg-error-light text-error p-4 rounded-lg flex items-start gap-3 border border-error-light animate-in slide-in-from-top-2">
+              <IconAlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="font-bold">Error</p>
+                <p className="whitespace-pre-wrap text-sm">{error}</p>
+              </div>
             </div>
           )}
 
-          {step === 1 && (
-            <fieldset style={{ border: '1px solid #ddd', padding: 16, marginBottom: 16, background: '#fff', borderRadius: 8 }}>
-              <legend>Room Booking</legend>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            {/* Left Column: Form Content */}
+            <div className="lg:col-span-2 space-y-6">
+              {step === 1 && (
+                <Card className="animate-in fade-in slide-in-from-left-4 duration-300 border-0 shadow-sm ring-1 ring-gray-200">
+                  <div className="flex items-center gap-2 mb-6 border-b border-gray-100 pb-4">
+                    <IconBed className="w-5 h-5 text-gray-500" />
+                    <h3 className="text-lg font-semibold text-gray-800">Room Selection</h3>
+                  </div>
 
-              {roomsError && (
-                <div style={{ background: '#ffe5e5', color: '#900', padding: '8px 12px', borderRadius: 6, marginBottom: 12 }}>
-                  {roomsError}
-                </div>
+                  {roomsError && (
+                    <div className="bg-error-light text-error p-3 rounded-md mb-6 text-sm border border-error-light flex items-center gap-2">
+                      <IconAlertCircle className="w-4 h-4" />
+                      {roomsError}
+                    </div>
+                  )}
+
+                  <div className="space-y-6">
+                    <Select
+                      label="Select Room"
+                      value={room_id}
+                      onChange={(e) => setRoomId(e.target.value)}
+                      disabled={roomsLoading || rooms.length === 0}
+                      error={step1Errors.room_id}
+                      required
+                      helperText={!roomsLoading && rooms.length === 0 ? "No active rooms available" : undefined}
+                      fullWidth
+                    >
+                      <option value="">Choose a room...</option>
+                      {rooms.map((r) => (
+                        <option key={String(r.id)} value={String(r.id)}>
+                          {r.room_number} — ₦{Number(r.price_per_night).toLocaleString()} / night
+                        </option>
+                      ))}
+                    </Select>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <Input
+                        type="date"
+                        label="Check-in Date"
+                        value={check_in}
+                        onChange={(e) => setCheckIn(e.target.value)}
+                        required
+                        error={step1Errors.check_in}
+                        fullWidth
+                      />
+                      <Input
+                        type="date"
+                        label="Check-out Date"
+                        value={check_out}
+                        onChange={(e) => setCheckOut(e.target.value)}
+                        required
+                        error={step1Errors.check_out}
+                        fullWidth
+                      />
+                    </div>
+                  </div>
+                </Card>
               )}
 
-              <label style={{ display: 'block', marginBottom: 8 }}>
-                Room
-                <select value={room_id} onChange={(e) => setRoomId(e.target.value)} required style={{ width: '100%', padding: 10 }} disabled={roomsLoading || rooms.length === 0}>
-                  <option value="">Select a room</option>
-                  {rooms.map((r) => (
-                    <option key={String(r.id)} value={String(r.id)}>
-                      {r.room_number} — ₦{Number(r.price_per_night).toFixed(2)} / night
-                    </option>
-                  ))}
-                </select>
-                {!roomsLoading && rooms.length === 0 && (
-                  <div style={{ color: '#900', marginTop: 4 }}>No active rooms available</div>
-                )}
-                {step1Errors.room_id && <div style={{ color: '#900', marginTop: 4 }}>{step1Errors.room_id}</div>}
-              </label>
+              {step === 2 && (
+                <Card className="animate-in fade-in slide-in-from-right-4 duration-300 border-0 shadow-sm ring-1 ring-gray-200">
+                  <div className="space-y-8">
+                    {/* Guest Section */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-6 border-b border-gray-100 pb-4">
+                        <IconUser className="w-5 h-5 text-gray-500" />
+                        <h3 className="text-lg font-semibold text-gray-800">Guest Information</h3>
+                      </div>
 
-              <div style={{ display: 'flex', gap: 12 }}>
-                <label style={{ flex: 1 }}>
-                  Check-in date
-                  <input type="date" value={check_in} onChange={(e) => setCheckIn(e.target.value)} required style={{ width: '100%', padding: 10 }} />
-                  {step1Errors.check_in && <div style={{ color: '#900', marginTop: 4 }}>{step1Errors.check_in}</div>}
-                </label>
-                <label style={{ flex: 1 }}>
-                  Check-out date
-                  <input type="date" value={check_out} onChange={(e) => setCheckOut(e.target.value)} required style={{ width: '100%', padding: 10 }} />
-                  {step1Errors.check_out && <div style={{ color: '#900', marginTop: 4 }}>{step1Errors.check_out}</div>}
-                </label>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <Input
+                          label="Full Name"
+                          value={full_name}
+                          onChange={(e) => setFullName(e.target.value)}
+                          required
+                          placeholder="e.g. John Doe"
+                          error={step2Errors.full_name}
+                          fullWidth
+                        />
+                        <Input
+                          label="Phone Number"
+                          type="tel"
+                          value={phone}
+                          onChange={(e) => setPhone(e.target.value)}
+                          required
+                          placeholder="e.g. 08012345678"
+                          error={step2Errors.phone}
+                          fullWidth
+                        />
+                        <Input
+                          label="Email Address"
+                          type="email"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          placeholder="Optional"
+                          fullWidth
+                        />
+                        <Input
+                          label="ID Reference"
+                          value={id_reference}
+                          onChange={(e) => setIdReference(e.target.value)}
+                          placeholder="Passport / NIN / DL (Optional)"
+                          fullWidth
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-6 mt-6">
+                        <Input
+                          type="number"
+                          label="Adults"
+                          min={0}
+                          value={adults}
+                          onChange={(e) => setAdults(Number(e.target.value))}
+                          required
+                          error={step2Errors.adults}
+                          fullWidth
+                        />
+                        <Input
+                          type="number"
+                          label="Children"
+                          min={0}
+                          value={children}
+                          onChange={(e) => setChildren(Number(e.target.value))}
+                          required
+                          error={step2Errors.children}
+                          fullWidth
+                        />
+                      </div>
+                    </div>
+
+                    {/* Payment Section */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-6 border-b border-gray-100 pb-4">
+                        <IconCreditCard className="w-5 h-5 text-gray-500" />
+                        <h3 className="text-lg font-semibold text-gray-800">Payment Details</h3>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <Select
+                          label="Payment Method"
+                          value={payment_method}
+                          onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+                          required
+                          error={step2Errors.payment_method}
+                          fullWidth
+                        >
+                          <option value="transfer">Transfer</option>
+                          <option value="POS">POS</option>
+                          <option value="cash">Cash</option>
+                        </Select>
+                        <Select
+                          label="Payment Type"
+                          value={payment_type}
+                          onChange={(e) => setPaymentType(e.target.value as PaymentType)}
+                          required
+                          error={step2Errors.payment_type}
+                          fullWidth
+                        >
+                          <option value="full">Full Payment</option>
+                          <option value="part">Part Payment</option>
+                        </Select>
+                        <Input
+                          type="number"
+                          label="Amount Paid (₦)"
+                          min={0}
+                          step="0.01"
+                          value={paid_amount}
+                          onChange={(e) => setPaidAmount(Number(e.target.value))}
+                          required
+                          error={step2Errors.paid_amount}
+                          fullWidth
+                        />
+                        <Input
+                          type="date"
+                          label="Payment Date"
+                          value={payment_date}
+                          onChange={(e) => setPaymentDate(e.target.value)}
+                          required
+                          error={step2Errors.payment_date}
+                          fullWidth
+                        />
+                      </div>
+                      <div className="mt-6">
+                         <Input
+                          label="Payment Reference"
+                          value={payment_reference ?? ''}
+                          onChange={(e) => setPaymentReference(e.target.value)}
+                          placeholder="Txn ID, POS slip number, etc. (Optional)"
+                          fullWidth
+                        />
+                      </div>
+                    </div>
+                    
+                    {/* Additional Details */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-6 border-b border-gray-100 pb-4">
+                        <IconFileText className="w-5 h-5 text-gray-500" />
+                        <h3 className="text-lg font-semibold text-gray-800">Additional Details</h3>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                        <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                          <label className="block text-sm font-medium text-gray-500 mb-1">Outstanding Balance</label>
+                          <div className={`text-2xl font-bold ${balance > 0 ? 'text-error' : 'text-green-600'}`}>
+                            ₦{balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </div>
+                        </div>
+                        
+                        <Select
+                          label="Staff Responsible"
+                          value={frontDeskStaffId}
+                          onChange={(e) => setFrontDeskStaffId(e.target.value)}
+                          required
+                          disabled={isStaffDropdownDisabled}
+                          error={step2Errors.front_desk_staff_id}
+                          fullWidth
+                        >
+                          <option value="">Select staff member</option>
+                          {frontDeskStaffOptions.map((s) => (
+                            <option key={s.id} value={s.id}>{s.full_name}</option>
+                          ))}
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="block text-sm font-medium text-gray-700">Additional Notes</label>
+                        <textarea 
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500/20 focus:border-green-500 transition-all text-sm"
+                          rows={3}
+                          value={notes ?? ''}
+                          onChange={(e) => setNotes(e.target.value)}
+                          placeholder="Any special requests or comments..."
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+              )}
+            </div>
+
+            {/* Right Column: Summary & Navigation */}
+            <div className="lg:col-span-1 space-y-6">
+              <div className="sticky top-6 space-y-6">
+                <Card className="bg-gray-50/50 border-gray-200 shadow-sm">
+                  <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-4 border-b border-gray-200 pb-2">Booking Summary</h3>
+                  
+                  <div className="space-y-3 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Rate per Night</span>
+                      <span className="font-medium">₦{room_rate.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Nights</span>
+                      <span className="font-medium">{nights}</span>
+                    </div>
+                    {step === 2 && (
+                       <div className="flex justify-between text-green-600">
+                        <span>Paid Amount</span>
+                        <span className="font-medium">- ₦{paid_amount.toLocaleString()}</span>
+                      </div>
+                    )}
+                    
+                    <div className="pt-3 border-t border-gray-200 flex justify-between items-center">
+                      <span className="font-bold text-gray-900">Total Due</span>
+                      <span className="text-xl font-bold text-green-600">
+                         ₦{(total_room_cost - (step === 2 ? paid_amount : 0)).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                     <div className="flex justify-between text-xs text-gray-500 mt-1">
+                        <span>Total Cost</span>
+                        <span>₦{total_room_cost.toLocaleString()}</span>
+                      </div>
+                  </div>
+                </Card>
+
+                <div className="flex flex-col gap-3">
+                  {step === 1 ? (
+                    <Button 
+                      onClick={goNext} 
+                      className="w-full justify-center shadow-md hover:shadow-lg transition-shadow"
+                      size="lg"
+                    >
+                      Next Step
+                      <IconChevronRight className="w-4 h-4 ml-2" />
+                    </Button>
+                  ) : (
+                    <>
+                      <Button 
+                        onClick={(e) => handleSubmit(e)} 
+                        className="w-full justify-center shadow-md hover:shadow-lg transition-shadow bg-green-600 hover:bg-green-700 text-white"
+                        size="lg"
+                        isLoading={submitting}
+                        disabled={submitting}
+                      >
+                        <IconCheckCircle className="w-4 h-4 mr-2" />
+                        Complete Check-In
+                      </Button>
+                      <Button 
+                        onClick={goBack} 
+                        variant="outline"
+                        className="w-full justify-center"
+                        disabled={submitting}
+                      >
+                        <IconChevronLeft className="w-4 h-4 mr-2" />
+                        Back to Room
+                      </Button>
+                    </>
+                  )}
+                </div>
               </div>
-
-              <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-                <label style={{ flex: 1 }}>
-                  Nights (auto)
-                  <input type="number" min={0} value={nights} readOnly style={{ width: '100%', padding: 10 }} />
-                  {step1Errors.nights && <div style={{ color: '#900', marginTop: 4 }}>{step1Errors.nights}</div>}
-                </label>
-                <label style={{ flex: 1 }}>
-                  Price per night (read-only)
-                  <input type="number" min={0} step="0.01" value={room_rate} readOnly style={{ width: '100%', padding: 10 }} />
-                  {step1Errors.room_rate && <div style={{ color: '#900', marginTop: 4 }}>{step1Errors.room_rate}</div>}
-                </label>
-              </div>
-
-              <label style={{ display: 'block', marginTop: 8 }}>
-                Total (auto)
-                <input type="number" min={0} step="0.01" value={total_room_cost} readOnly style={{ width: '100%', padding: 10 }} />
-              </label>
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginTop: 16 }}>
-                <span />
-                <button type="button" onClick={goNext} style={{ padding: '12px 16px', background: '#1B5E20', color: '#fff', border: 0, borderRadius: 8 }}>
-                  Next: Guest & Payment
-                </button>
-              </div>
-            </fieldset>
-          )}
-
-          {step === 2 && (
-            <fieldset style={{ border: '1px solid #ddd', padding: 16, marginBottom: 16, background: '#fff', borderRadius: 8 }}>
-              <legend>Guest & Payment</legend>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <label>
-                  Guest full name
-                  <input type="text" value={full_name} onChange={(e) => setFullName(e.target.value)} required style={{ width: '100%', padding: 10 }} />
-                  {step2Errors.full_name && <div style={{ color: '#900', marginTop: 4 }}>{step2Errors.full_name}</div>}
-                </label>
-                <label>
-                  Phone
-                  <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} required style={{ width: '100%', padding: 10 }} />
-                  {step2Errors.phone && <div style={{ color: '#900', marginTop: 4 }}>{step2Errors.phone}</div>}
-                </label>
-                <label>
-                  Email (optional)
-                  <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} style={{ width: '100%', padding: 10 }} />
-                </label>
-                <label>
-                  ID reference (optional)
-                  <input type="text" value={id_reference} onChange={(e) => setIdReference(e.target.value)} style={{ width: '100%', padding: 10 }} />
-                </label>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
-                <label>
-                  Adults count
-                  <input type="number" min={0} value={adults} onChange={(e) => setAdults(Number(e.target.value))} required style={{ width: '100%', padding: 10 }} />
-                  {step2Errors.adults && <div style={{ color: '#900', marginTop: 4 }}>{step2Errors.adults}</div>}
-                </label>
-                <label>
-                  Children count
-                  <input type="number" min={0} value={children} onChange={(e) => setChildren(Number(e.target.value))} required style={{ width: '100%', padding: 10 }} />
-                  {step2Errors.children && <div style={{ color: '#900', marginTop: 4 }}>{step2Errors.children}</div>}
-                </label>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
-                <label>
-                  Payment method
-                  <select value={payment_method} onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)} required style={{ width: '100%', padding: 10 }}>
-                    <option value="transfer">Transfer</option>
-                    <option value="POS">POS</option>
-                  </select>
-                  {step2Errors.payment_method && <div style={{ color: '#900', marginTop: 4 }}>{step2Errors.payment_method}</div>}
-                </label>
-                <label>
-                  Payment type
-                  <select value={payment_type} onChange={(e) => setPaymentType(e.target.value as PaymentType)} required style={{ width: '100%', padding: 10 }}>
-                    <option value="full">Full</option>
-                    <option value="part">Part</option>
-                  </select>
-                  {step2Errors.payment_type && <div style={{ color: '#900', marginTop: 4 }}>{step2Errors.payment_type}</div>}
-                </label>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
-                <label>
-                  Amount paid
-                  <input type="number" min={0} step="0.01" value={paid_amount} onChange={(e) => setPaidAmount(Number(e.target.value))} required style={{ width: '100%', padding: 10 }} />
-                  {step2Errors.paid_amount && <div style={{ color: '#900', marginTop: 4 }}>{step2Errors.paid_amount}</div>}
-                </label>
-                <label>
-                  Payment date
-                  <input type="date" value={payment_date} onChange={(e) => setPaymentDate(e.target.value)} required style={{ width: '100%', padding: 10 }} />
-                  {step2Errors.payment_date && <div style={{ color: '#900', marginTop: 4 }}>{step2Errors.payment_date}</div>}
-                </label>
-              </div>
-
-              <label style={{ display: 'block', marginTop: 8 }}>
-                Payment reference (optional)
-                <input type="text" value={payment_reference ?? ''} onChange={(e) => setPaymentReference(e.target.value)} placeholder="Txn ID or POS slip #" style={{ width: '100%', padding: 10 }} />
-              </label>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
-                <label>
-                  Outstanding balance (auto)
-                  <input type="number" min={0} step="0.01" value={balance} readOnly style={{ width: '100%', padding: 10 }} />
-                </label>
-                <label>
-                  Front Desk Staff Responsible
-                  <select value={frontDeskStaffId} onChange={(e) => setFrontDeskStaffId(e.target.value)} required disabled={isStaffDropdownDisabled} style={{ width: '100%', padding: 10 }}>
-                    <option value="">Select staff</option>
-                    {frontDeskStaffOptions.map((s) => (
-                      <option key={s.id} value={s.id}>{s.full_name}</option>
-                    ))}
-                  </select>
-                  {step2Errors.front_desk_staff_id && <div style={{ color: '#900', marginTop: 4 }}>{step2Errors.front_desk_staff_id}</div>}
-                </label>
-              </div>
-
-              <label style={{ display: 'block', marginTop: 8 }}>
-                Notes (optional)
-                <textarea value={notes ?? ''} onChange={(e) => setNotes(e.target.value)} rows={3} style={{ width: '100%', padding: 10 }} placeholder="Optional notes" />
-              </label>
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginTop: 16 }}>
-                <button type="button" onClick={goBack} style={{ padding: '12px 16px', background: '#eee', color: '#333', border: 0, borderRadius: 8 }}>Back</button>
-                <button type="submit" disabled={submitting} style={{ padding: '12px 16px', background: '#1B5E20', color: '#fff', border: 0, borderRadius: 8 }}>
-                  {submitting ? 'Submitting...' : 'Submit for Approval'}
-                </button>
-              </div>
-            </fieldset>
-          )}
+            </div>
+          </div>
         </form>
       ) : (
-        <div style={{ maxWidth: 700, margin: '40px auto', textAlign: 'center' }}>
-          <h2>Submitted for Supervisor Approval</h2>
-          <p>Your room booking and guest record have been submitted and are pending review.</p>
-        </div>
+        <Card className="text-center py-16 animate-in zoom-in-50 duration-500">
+           <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6">
+             <IconCheckCircle className="w-10 h-10" />
+           </div>
+           <h2 className="text-3xl font-bold text-gray-900 mb-2">Check-In Successful!</h2>
+           <p className="text-gray-500 mb-8">The guest has been checked in and the room is now occupied.</p>
+           
+           <Button 
+             onClick={() => window.location.reload()} 
+             className="min-w-[200px]"
+             size="lg"
+           >
+             Process Another Guest
+           </Button>
+        </Card>
       )}
     </div>
   );

@@ -1,21 +1,36 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
-
-interface OperationalRecordRow {
-  id: string;
-  entity_type: 'front_desk' | 'kitchen' | 'bar' | 'storekeeper' | string;
-  status: 'pending' | 'rejected' | 'approved' | string;
-  data: any | null;
-  created_at: string | null;
-  original_id?: string | null;
-  submitted_by?: string | null;
-}
+import { Card } from './ui/Card';
+import { Button } from './ui/Button';
+import { Input } from './ui/Input';
+import { Select } from './ui/Select';
+import { Badge } from './ui/Badge';
+import { Modal } from './ui/Modal';
+import { Checkbox } from './ui/Checkbox';
+import { 
+  Table, 
+  TableHeader, 
+  TableBody, 
+  TableHead, 
+  TableRow, 
+  TableCell 
+} from './ui/Table';
+import { RecordDetails, type OperationalRecordRow } from './RecordDetails';
+import { 
+  IconCheckCircle, 
+  IconXCircle,
+  IconAlertCircle,
+  IconClock,
+  IconList
+} from './ui/Icons';
 
 function formatDate(iso: string | null | undefined) {
   if (!iso) return '—';
   try {
-    return new Date(iso).toLocaleString();
+    return new Date(iso).toLocaleString(undefined, {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
   } catch {
     return iso ?? '—';
   }
@@ -28,113 +43,31 @@ const DEPARTMENT_LABEL: Record<string, string> = {
   storekeeper: 'Storekeeper',
 };
 
-function Details({ record }: { record: OperationalRecordRow }) {
-  const d: any = record.data ?? {};
-  const type = record.entity_type;
-  if (type === 'front_desk') {
-    return (
-      <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Record Details — Front Desk</h3>
-        <section style={{ marginBottom: 12 }}>
-          <h4>Guest Info</h4>
-          <div>Full Name: {d?.guest?.full_name ?? '—'}</div>
-          <div>Phone: {d?.guest?.phone ?? '—'}</div>
-          <div>Email: {d?.guest?.email ?? '—'}</div>
-          <div>ID Ref: {d?.guest?.id_reference ?? '—'}</div>
-        </section>
-        <section style={{ marginBottom: 12 }}>
-          <h4>Stay Info</h4>
-          <div>Room ID: {d?.stay?.room_id ?? '—'}</div>
-          <div>Check-in: {d?.stay?.check_in ?? '—'}</div>
-          <div>Check-out: {d?.stay?.check_out ?? '—'}</div>
-          <div>Adults: {d?.stay?.adults ?? '—'}</div>
-          <div>Children: {d?.stay?.children ?? '—'}</div>
-        </section>
-        <section style={{ marginBottom: 12 }}>
-          <h4>Notes</h4>
-          <div>{d?.meta?.notes ?? '—'}</div>
-        </section>
-        <div>Submitted: {formatDate(record.created_at)}</div>
-      </div>
-    );
-  }
-  if (type === 'kitchen') {
-    return (
-      <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Record Details — Kitchen</h3>
-        <div>Date: {d?.date ?? '—'}</div>
-        <div>Item: {d?.item_name ?? '—'}</div>
-        <div>Opening: {d?.opening_stock ?? '—'}</div>
-        <div>Restocked: {d?.restocked ?? '—'}</div>
-        <div>Sold: {d?.sold ?? '—'}</div>
-        <div>Closing: {d?.closing_stock ?? '—'}</div>
-        <div>Notes: {d?.notes ?? '—'}</div>
-        <div style={{ marginTop: 8 }}>Submitted: {formatDate(record.created_at)}</div>
-      </div>
-    );
-  }
-  if (type === 'bar') {
-    return (
-      <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Record Details — Bar</h3>
-        <div>Date: {d?.date ?? '—'}</div>
-        <div>Item: {d?.item_name ?? '—'}</div>
-        <div>Opening: {d?.opening_stock ?? '—'}</div>
-        <div>Restocked: {d?.restocked ?? '—'}</div>
-        <div>Sold: {d?.sold ?? '—'}</div>
-        <div>Closing: {d?.closing_stock ?? '—'}</div>
-        <div>Notes: {d?.notes ?? '—'}</div>
-        <div style={{ marginTop: 8 }}>Submitted: {formatDate(record.created_at)}</div>
-      </div>
-    );
-  }
-  if (type === 'storekeeper') {
-    return (
-      <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Record Details — Storekeeper</h3>
-        <div>Date: {d?.date ?? '—'}</div>
-        <div>Item: {d?.item_name ?? '—'}</div>
-        <div>Opening: {d?.opening_stock ?? '—'}</div>
-        <div>Restocked: {d?.restocked ?? '—'}</div>
-        <div>Issued: {d?.issued ?? '—'}</div>
-        <div>Closing: {d?.closing_stock ?? '—'}</div>
-        <div>Notes: {d?.notes ?? '—'}</div>
-        <div style={{ marginTop: 8 }}>Submitted: {formatDate(record.created_at)}</div>
-      </div>
-    );
-  }
-  return (
-    <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16 }}>
-      <h3 style={{ marginTop: 0 }}>Record Details</h3>
-      <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(d ?? {}, null, 2)}</pre>
-      <div>Submitted: {formatDate(record.created_at)}</div>
-    </div>
-  );
-}
-
 export default function SupervisorInbox() {
   const { session, role, isConfigured } = useAuth();
-  // removed: const [activeTab, setActiveTab] = useState<'approvals' | 'config'>('approvals');
   const [records, setRecords] = useState<OperationalRecordRow[]>([]);
-  const [selected, setSelected] = useState<OperationalRecordRow | null>(null);
+  const [selectedRecord, setSelectedRecord] = useState<OperationalRecordRow | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadingList, setLoadingList] = useState<boolean>(false);
   const [actionLoading, setActionLoading] = useState<boolean>(false);
   const [rejectReason, setRejectReason] = useState<string>('');
   const [showReject, setShowReject] = useState<boolean>(false);
   const [successMessage, setSuccessMessage] = useState<string>('');
-  // Filters & drawer state
+  
+  // Bulk Selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Filters
   const [filterDept, setFilterDept] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
-  const [showDrawer, setShowDrawer] = useState<boolean>(false);
-
+  
+  const [showDetails, setShowDetails] = useState<boolean>(false);
   const [profilesMap, setProfilesMap] = useState<Record<string, { full_name: string | null; role: string | null }>>({});
 
-  const canUse = useMemo(() => Boolean(isConfigured && session && role === 'supervisor'), [isConfigured, session, role]);
+  const canUse = useMemo(() => Boolean(isConfigured && session && (role === 'supervisor' || role === 'manager' || role === 'admin')), [isConfigured, session, role]);
 
-  // Entity type filter options derived from pending records
   const typeOptions = useMemo(() => {
     const s = new Set<string>();
     for (const r of records) {
@@ -144,12 +77,30 @@ export default function SupervisorInbox() {
     return Array.from(s);
   }, [records]);
 
-  // Apply type filter to the fetched records
   const filteredRecords = useMemo(() => {
-    if (typeFilter === 'all') return records;
-    if (typeFilter === 'none') return records.filter((r) => !(r as any)?.data?.type);
-    return records.filter((r) => String((r as any)?.data?.type ?? '') === typeFilter);
+    let res = records;
+    if (typeFilter !== 'all') {
+      if (typeFilter === 'none') res = res.filter((r) => !(r as any)?.data?.type);
+      else res = res.filter((r) => String((r as any)?.data?.type ?? '') === typeFilter);
+    }
+    return res;
   }, [records, typeFilter]);
+
+  const groupsByOriginal = useMemo(() => {
+    const byOrig: Record<string, OperationalRecordRow[]> = {};
+    for (const r of filteredRecords) {
+      const key = (r.original_id ?? r.id) as string;
+      if (!byOrig[key]) byOrig[key] = [];
+      byOrig[key].push(r);
+    }
+    return byOrig;
+  }, [filteredRecords]);
+
+  const orderedGroupKeys = useMemo(() => Object.keys(groupsByOriginal).sort((a, b) => {
+    const ra = groupsByOriginal[a]?.[0];
+    const rb = groupsByOriginal[b]?.[0];
+    return (rb?.created_at ? new Date(rb.created_at).getTime() : 0) - (ra?.created_at ? new Date(ra.created_at).getTime() : 0);
+  }), [groupsByOriginal]);
 
   useEffect(() => {
     async function fetchPending() {
@@ -188,12 +139,11 @@ export default function SupervisorInbox() {
           submitted_by: r?.submitted_by ?? null,
         })) as OperationalRecordRow[];
         setRecords(safe);
+        
+        // Fetch profiles
         const ids = Array.from(new Set(safe.map((r) => r.submitted_by).filter(Boolean))) as string[];
         if (ids.length) {
-          const { data: profs, error: pErr } = await sb
-            .from('profiles')
-            .select('id, full_name, role')
-            .in('id', ids);
+          const { data: profs, error: pErr } = await sb.from('profiles').select('id, full_name, role').in('id', ids);
           if (!pErr && profs) {
             const map: Record<string, { full_name: string | null; role: string | null }> = {};
             for (const p of profs as any[]) {
@@ -209,290 +159,440 @@ export default function SupervisorInbox() {
     fetchPending();
   }, [canUse, filterDept, fromDate, toDate]);
 
-  const groupsByOriginal = useMemo(() => {
-    const byOrig: Record<string, OperationalRecordRow[]> = {};
-    for (const r of filteredRecords) {
-      const key = (r.original_id ?? r.id) as string;
-      if (!byOrig[key]) byOrig[key] = [];
-      byOrig[key].push(r);
+  const handleSelectAll = () => {
+    if (selectedIds.size === orderedGroupKeys.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(orderedGroupKeys));
     }
-    return byOrig;
-  }, [filteredRecords]);
+  };
 
-  const orderedGroupKeys = useMemo(() => Object.keys(groupsByOriginal).sort((a, b) => {
-    const ra = groupsByOriginal[a]?.[0];
-    const rb = groupsByOriginal[b]?.[0];
-    return (rb?.created_at ? new Date(rb.created_at).getTime() : 0) - (ra?.created_at ? new Date(ra.created_at).getTime() : 0);
-  }), [groupsByOriginal]);
-
-  // removed: collapsed state
-  // removed: const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  // removed: function toggleGroup(key: string) {
-  //   setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
-  // }
+  const toggleSelection = (id: string) => {
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) newSet.delete(id);
+    else newSet.add(id);
+    setSelectedIds(newSet);
+  };
 
   async function approveGroup(originalId: string) {
-    const sb = supabase;
-    if (!canUse || !sb) return;
-    setError(null);
-    setSuccessMessage('');
-    setActionLoading(true);
-    try {
-      const group = groupsByOriginal[originalId] || [];
-      for (const rec of group) {
-        const { error } = await sb.rpc('approve_record', { _id: rec.id });
-        if (error) {
-          setError(error.message);
-          return;
-        }
-      }
-      setRecords((prev) => prev.filter((r) => (r.original_id ?? r.id) !== originalId));
-      setSelected(null);
-      setShowReject(false);
-      setSuccessMessage('Record(s) approved successfully.');
-    } finally {
-      setActionLoading(false);
-    }
+    await processGroups([originalId], 'approve');
   }
 
   async function rejectGroup(originalId: string) {
+    if (!rejectReason.trim()) {
+      setError('Rejection requires a reason.');
+      return;
+    }
+    await processGroups([originalId], 'reject', rejectReason);
+  }
+
+  async function handleBulkApprove() {
+    if (selectedIds.size === 0) return;
+    if (!window.confirm(`Approve ${selectedIds.size} selected items?`)) return;
+    await processGroups(Array.from(selectedIds), 'approve');
+  }
+
+  async function processGroups(originalIds: string[], action: 'approve' | 'reject', reason?: string) {
     const sb = supabase;
     if (!canUse || !sb) return;
     setError(null);
     setSuccessMessage('');
     setActionLoading(true);
     try {
-      const reason = rejectReason.trim();
-      if (!reason) {
-        setError('Rejection requires a non-empty reason.');
-        return;
-      }
-      const group = groupsByOriginal[originalId] || [];
-      for (const rec of group) {
-        const { error } = await sb.rpc('reject_record', { _id: rec.id, _reason: reason });
-        if (error) {
-          setError(error.message);
-          return;
+      for (const oid of originalIds) {
+        const group = groupsByOriginal[oid] || [];
+        for (const rec of group) {
+          if (action === 'approve') {
+            const { error } = await sb.rpc('approve_record', { _id: rec.id });
+            if (error) throw error;
+          } else {
+            const { error } = await sb.rpc('reject_record', { _id: rec.id, _reason: reason || 'Rejected via bulk action' });
+            if (error) throw error;
+          }
         }
       }
-      setRecords((prev) => prev.filter((r) => (r.original_id ?? r.id) !== originalId));
-      setSelected(null);
-      setRejectReason('');
+      
+      // Remove processed from list
+      const processedSet = new Set(originalIds);
+      setRecords((prev) => prev.filter((r) => !processedSet.has((r.original_id ?? r.id) as string)));
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        originalIds.forEach(id => next.delete(id));
+        return next;
+      });
+      
+      setSelectedRecord(null);
       setShowReject(false);
-      setSuccessMessage('Record(s) rejected successfully.');
+      setRejectReason('');
+      setSuccessMessage(`Successfully ${action}ed ${originalIds.length} submission(s).`);
+      setTimeout(() => setSuccessMessage(''), 3000);
+    } catch (e: any) {
+      setError(e.message);
     } finally {
       setActionLoading(false);
     }
   }
 
-  // Configuration Tab State
-  // const [category, setCategory] = useState<'food' | 'drink' | 'provision'>('food');
-  // const [collectionName, setCollectionName] = useState<string>('');
-  // const [itemName, setItemName] = useState<string>('');
-  // const [openingQty, setOpeningQty] = useState<number>(0);
-  // const [restockQty, setRestockQty] = useState<number>(0);
-  // const [restockDate, setRestockDate] = useState<string>('');
-  // const [cfgMsg, setCfgMsg] = useState<string>('');
-  // const [cfgErr, setCfgErr] = useState<string>('');
-  // const [cfgLoading, setCfgLoading] = useState<boolean>(false);
-
-  // async function insertAndApproveStorekeeper(data: any) {
-  //   setCfgErr('');
-  //   setCfgMsg('');
-  //   setCfgLoading(true);
-  //   try {
-  //     const sb = supabase;
-  //     if (!sb) {
-  //       setCfgErr('Supabase is not configured.');
-  //       return;
-  //     }
-  //     const { data: inserted, error: insErr } = await sb
-  //       .from('operational_records')
-  //       .insert({ entity_type: 'storekeeper', data, financial_amount: 0 })
-  //       .select()
-  //       .single();
-  //     if (insErr) {
-  //       setCfgErr(insErr.message);
-  //       return;
-  //     }
-  //     const id = (inserted as any)?.id;
-  //     if (!id) {
-  //       setCfgErr('Failed to insert configuration record.');
-  //       return;
-  //     }
-  //     const { error: aprErr } = await sb.rpc('approve_record', { _id: id });
-  //     if (aprErr) {
-  //       setCfgErr(aprErr.message);
-  //       return;
-  //     }
-  //     setCfgMsg('Saved successfully.');
-  //     setCollectionName('');
-  //     setItemName('');
-  //     setOpeningQty(0);
-  //     setRestockQty(0);
-  //     setRestockDate('');
-  //   } finally {
-  //     setCfgLoading(false);
-  //   }
-  // }
-
-  function ApprovalsTab() {
-    const noRecords = orderedGroupKeys.length === 0;
-    return (
-      <div>
-        {error && (
-          <div style={{ background: '#ffe5e5', color: '#900', padding: '8px 12px', borderRadius: 6, marginTop: 8 }}>
-            {error}
-          </div>
-        )}
-        {successMessage && (
-          <div style={{ background: '#e6ffed', color: '#0a7f3b', padding: '8px 12px', borderRadius: 6, marginTop: 8 }}>
-            {successMessage}
-          </div>
-        )}
-        {/* Filters */}
-        <div style={{ background: '#fff', border: '1px solid #ddd', borderRadius: 8, padding: 16, marginTop: 8 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
-            <div>
-              <label style={{ display: 'block', marginBottom: 6 }}>Department</label>
-              <select value={filterDept} onChange={(e) => setFilterDept(e.target.value)} style={{ width: '100%', padding: '8px 10px' }}>
-                <option value="all">All</option>
-                <option value="front_desk">Front Desk</option>
-                <option value="kitchen">Kitchen</option>
-                <option value="bar">Bar</option>
-                <option value="storekeeper">Storekeeper</option>
-              </select>
-            </div>
-            <div>
-              <label style={{ display: 'block', marginBottom: 6 }}>Entity type</label>
-              <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ width: '100%', padding: '8px 10px' }}>
-                <option value="all">All</option>
-                <option value="none">None</option>
-                {typeOptions.map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label style={{ display: 'block', marginBottom: 6 }}>From date</label>
-              <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} style={{ width: '100%', padding: '8px 10px' }} />
-            </div>
-            <div>
-              <label style={{ display: 'block', marginBottom: 6 }}>To date</label>
-              <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} style={{ width: '100%', padding: '8px 10px' }} />
-            </div>
-          </div>
-        </div>
-        {loadingList ? (
-          <div className="table-loading">Loading records...</div>
-        ) : noRecords ? (
-          <div style={{ color: '#666', marginTop: 12 }}>No pending records.</div>
-        ) : (
-          <div style={{ background: '#fff', border: '1px solid #ddd', borderRadius: 8 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Entity</th>
-                  <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Department</th>
-                  <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Submitted by</th>
-                  <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Submission date</th>
-                  <th style={{ textAlign: 'right', borderBottom: '1px solid #ddd', padding: 8 }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orderedGroupKeys.map((orig) => {
-                  const group = groupsByOriginal[orig] || [];
-                  const first = group[0];
-                  const submittedName = first?.submitted_by ? (profilesMap[first.submitted_by]?.full_name ?? '—') : '—';
-                  const department = DEPARTMENT_LABEL[first?.entity_type ?? ''] ?? first?.entity_type ?? '—';
-                  return (
-                    <tr key={orig}>
-                      <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{first?.entity_type}</td>
-                      <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{department}</td>
-                      <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{submittedName}</td>
-                      <td style={{ borderBottom: '1px solid #eee', padding: 8 }}>{formatDate(first?.created_at)}</td>
-                      <td style={{ borderBottom: '1px solid #eee', padding: 8, textAlign: 'right' }}>
-                        <button
-                          className="btn"
-                          style={{ background: '#eee', color: '#333', padding: '6px 10px', borderRadius: 6, marginRight: 8 }}
-                          onClick={() => { setSelected(first ?? null); setShowDrawer(true); }}
-                          disabled={actionLoading}
-                        >
-                          Details
-                        </button>
-                        <button
-                          className="btn"
-                          style={{ background: '#1B5E20', color: '#fff', padding: '6px 10px', borderRadius: 6, marginRight: 8 }}
-                          onClick={() => approveGroup(orig)}
-                          disabled={actionLoading}
-                        >
-                          Approve
-                        </button>
-                        <button
-                          className="btn"
-                          style={{ background: '#eee', color: '#333', padding: '6px 10px', borderRadius: 6 }}
-                          onClick={() => { setSelected(first ?? null); setShowReject(true); }}
-                          disabled={actionLoading}
-                        >
-                          Reject
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Side drawer details */}
-        {showDrawer && selected && (
-          <div style={{ position: 'fixed', top: 0, right: 0, height: '100vh', width: 420, background: '#fff', boxShadow: '-2px 0 12px rgba(0,0,0,0.1)', zIndex: 1000, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid #eee' }}>
-              <h3 style={{ margin: 0 }}>Record Details</h3>
-              <button className="btn" onClick={() => setShowDrawer(false)} style={{ background: '#eee', color: '#333' }}>Close</button>
-            </div>
-            <div style={{ padding: 16, overflowY: 'auto' }}>
-              <Details record={selected} />
-            </div>
-          </div>
-        )}
-
-        {showReject && selected && (
-          <div className="modal-backdrop">
-            <div style={{ background: '#fff', padding: 16, borderRadius: 8, width: 480, maxWidth: '90vw' }}>
-              <h3 style={{ marginTop: 0 }}>Reject Submission</h3>
-              <p style={{ color: '#555' }}>Provide a reason for rejection. This is required.</p>
-              <textarea
-                value={rejectReason}
-                onChange={(e) => setRejectReason(e.target.value)}
-                rows={3}
-                style={{ width: '100%', padding: '8px 10px' }}
-              />
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
-                <button className="btn" onClick={() => { setShowReject(false); setRejectReason(''); }} style={{ background: '#eee', color: '#333', padding: '6px 10px', borderRadius: 6 }}>Cancel</button>
-                <button className="btn" onClick={() => rejectGroup(selected.original_id ?? selected.id)} style={{ background: '#1B5E20', color: '#fff', padding: '6px 10px', borderRadius: 6 }} disabled={actionLoading}>Confirm Reject</button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
+  const noRecords = orderedGroupKeys.length === 0;
 
   if (!canUse) {
     return (
-      <div style={{ maxWidth: 720, margin: '24px auto' }}>
-        <h2>Access denied</h2>
-        <p>You must be logged in as a supervisor to view this page.</p>
+      <div className="flex flex-col items-center justify-center min-h-[50vh] text-center p-8 animate-in fade-in">
+        <div className="bg-error-light text-error p-4 rounded-full mb-4">
+          <IconAlertCircle className="w-8 h-8" />
+        </div>
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h2>
+        <p className="text-gray-500 max-w-md">Only Supervisors, Managers, and Administrators can view this page.</p>
       </div>
     );
   }
 
   return (
-    <div style={{ padding: 16, fontFamily: 'Montserrat, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, sans-serif', background: '#fff' }}>
-      <h2 style={{ marginTop: 0 }}>Pending Approvals</h2>
-      <ApprovalsTab />
+    <div className="space-y-6 max-w-[1400px] mx-auto p-4 md:p-6 animate-in fade-in duration-500">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
+            <div className="p-2 bg-green-100 text-green-700 rounded-lg">
+              <IconList className="w-6 h-6" />
+            </div>
+            Pending Approvals
+          </h1>
+          <p className="text-gray-500 mt-1 ml-12">Review and manage operational record submissions</p>
+        </div>
+        
+        {selectedIds.size > 0 && (
+          <div className="flex items-center gap-3 bg-green-50 px-4 py-2 rounded-lg border border-green-100 animate-in slide-in-from-right-4">
+            <span className="text-sm font-medium text-green-900">{selectedIds.size} selected</span>
+            <div className="h-4 w-px bg-green-200"></div>
+            <Button size="sm" onClick={handleBulkApprove} disabled={actionLoading} className="bg-green-600 hover:bg-green-700 text-white">
+              Approve All
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setShowReject(true)} disabled={actionLoading} className="text-error border-error-light hover:bg-error-light">
+              Reject All
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {error && (
+        <div className="bg-error-light border border-error-light text-error px-4 py-3 rounded-lg flex items-start gap-3 animate-in slide-in-from-top-2">
+          <IconAlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+          <p>{error}</p>
+        </div>
+      )}
+      
+      {successMessage && (
+        <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg flex items-start gap-3 animate-in slide-in-from-top-2">
+          <IconCheckCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+          <p>{successMessage}</p>
+        </div>
+      )}
+
+      {/* Filters */}
+      <Card className="p-4 bg-gray-50/50 border-gray-200">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+          <Select
+            label="Department"
+            value={filterDept}
+            onChange={(e) => setFilterDept(e.target.value)}
+            options={[
+              { value: 'all', label: 'All Departments' },
+              { value: 'front_desk', label: 'Front Desk' },
+              { value: 'kitchen', label: 'Kitchen' },
+              { value: 'bar', label: 'Bar' },
+              { value: 'storekeeper', label: 'Storekeeper' },
+            ]}
+          />
+          
+          <Select
+            label="Entity Type"
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+            options={[
+              { value: 'all', label: 'All Types' },
+              { value: 'none', label: 'Uncategorized' },
+              ...typeOptions.map(t => ({ value: t, label: t }))
+            ]}
+          />
+
+          <Input
+            label="From Date"
+            type="date"
+            value={fromDate}
+            onChange={(e) => setFromDate(e.target.value)}
+          />
+
+          <Input
+            label="To Date"
+            type="date"
+            value={toDate}
+            onChange={(e) => setToDate(e.target.value)}
+          />
+        </div>
+      </Card>
+
+      {/* Content */}
+      <Card className="overflow-hidden border-0 shadow-sm ring-1 ring-gray-200">
+        {loadingList ? (
+          <div className="p-16 text-center text-gray-500 flex flex-col items-center">
+            <div className="w-10 h-10 border-4 border-gray-200 border-t-green-600 rounded-full animate-spin mb-4" />
+            <p className="font-medium">Loading pending records...</p>
+          </div>
+        ) : noRecords ? (
+          <div className="p-16 text-center text-gray-500 flex flex-col items-center bg-gray-50/50">
+            <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center text-gray-300 shadow-sm mb-4">
+              <IconCheckCircle className="w-8 h-8" />
+            </div>
+            <p className="font-medium text-gray-900 text-lg">All caught up!</p>
+            <p className="text-gray-500 mt-1">No pending records found matching your filters.</p>
+          </div>
+        ) : (
+          <>
+            {/* Desktop Table View */}
+            <div className="hidden md:block">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-10 sticky left-0 z-20 bg-gray-50 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
+                      <Checkbox 
+                        checked={selectedIds.size > 0 && selectedIds.size === orderedGroupKeys.length}
+                        onChange={handleSelectAll}
+                        className={selectedIds.size > 0 && selectedIds.size < orderedGroupKeys.length ? "opacity-50" : ""}
+                      />
+                    </TableHead>
+                    <TableHead className="sticky left-10 z-20 bg-gray-50 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">Department</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Submitted By</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {orderedGroupKeys.map((orig) => {
+                    const group = groupsByOriginal[orig] || [];
+                    const first = group[0];
+                    const submittedName = first?.submitted_by ? (profilesMap[first.submitted_by]?.full_name ?? 'Unknown') : 'Unknown';
+                    const department = DEPARTMENT_LABEL[first?.entity_type ?? ''] ?? first?.entity_type ?? '—';
+                    
+                    const deptVariant = 'success';
+
+                    return (
+                      <TableRow key={orig} className={selectedIds.has(orig) ? 'bg-green-50/50' : ''}>
+                        <TableCell className={`sticky left-0 z-10 bg-white shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] ${selectedIds.has(orig) ? 'bg-green-50/50' : 'group-hover:bg-gray-50'}`}>
+                          <Checkbox 
+                            checked={selectedIds.has(orig)}
+                            onChange={() => toggleSelection(orig)}
+                          />
+                        </TableCell>
+                        <TableCell className={`sticky left-10 z-10 bg-white shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] ${selectedIds.has(orig) ? 'bg-green-50/50' : 'group-hover:bg-gray-50'}`}>
+                          <Badge variant={deptVariant}>
+                            {department}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-gray-900 font-medium capitalize">
+                          {String(first?.data?.type ?? first?.entity_type ?? 'Record').replace(/_/g, ' ')}
+                        </TableCell>
+                        <TableCell className="text-gray-600">
+                          <div className="flex items-center gap-2">
+                            <div className="w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-500">
+                              {submittedName.charAt(0)}
+                            </div>
+                            {submittedName}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-gray-500">
+                          <div className="flex items-center gap-1.5">
+                            <IconClock className="w-3.5 h-3.5" />
+                            {formatDate(first?.created_at)}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => { setSelectedRecord(first ?? null); setShowDetails(true); }}
+                              disabled={actionLoading}
+                              className="text-gray-500 hover:text-green-700"
+                            >
+                              Details
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-green-600 hover:bg-green-50 border-green-200"
+                              onClick={() => approveGroup(orig)}
+                              disabled={actionLoading}
+                              title="Approve"
+                            >
+                              <IconCheckCircle className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-error hover:bg-error-light border-error-light"
+                              onClick={() => { setSelectedRecord(first ?? null); setShowReject(true); }}
+                              disabled={actionLoading}
+                              title="Reject"
+                            >
+                              <IconXCircle className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+
+            {/* Mobile Card View */}
+            <div className="md:hidden space-y-3">
+              {orderedGroupKeys.map((orig) => {
+                const group = groupsByOriginal[orig] || [];
+                const first = group[0];
+                const submittedName = first?.submitted_by ? (profilesMap[first.submitted_by]?.full_name ?? 'Unknown') : 'Unknown';
+                const department = DEPARTMENT_LABEL[first?.entity_type ?? ''] ?? first?.entity_type ?? '—';
+                
+                const deptVariant = 'success';
+
+                return (
+                  <Card key={orig} className={`p-4 transition-all duration-200 ${selectedIds.has(orig) ? 'ring-2 ring-green-500 bg-green-50/50' : 'hover:shadow-md'}`}>
+                    <div className="flex items-start gap-3 mb-3">
+                      <Checkbox 
+                        checked={selectedIds.has(orig)}
+                        onChange={() => toggleSelection(orig)}
+                        className="mt-1"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex justify-between items-start mb-1">
+                          <Badge variant={deptVariant} size="sm">{department}</Badge>
+                          <span className="text-xs text-gray-500 flex items-center gap-1">
+                            <IconClock className="w-3 h-3" />
+                            {formatDate(first?.created_at)}
+                          </span>
+                        </div>
+                        <h4 className="font-medium text-gray-900 capitalize mb-1 truncate">
+                          {String(first?.data?.type ?? first?.entity_type ?? 'Record').replace(/_/g, ' ')}
+                        </h4>
+                        <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                          <div className="w-5 h-5 rounded-full bg-gray-100 flex items-center justify-center text-[10px] font-bold text-gray-600">
+                            {submittedName.charAt(0)}
+                          </div>
+                          <span className="truncate">{submittedName}</span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="flex gap-2 pl-8">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1 h-9 text-xs"
+                        onClick={() => { setSelectedRecord(first ?? null); setShowDetails(true); }}
+                      >
+                        Details
+                      </Button>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        className="flex-1 bg-green-600 hover:bg-green-700 text-white h-9 text-xs shadow-sm border-transparent"
+                        onClick={() => approveGroup(orig)}
+                      >
+                        Approve
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-9 px-0 text-error border-error-light hover:bg-error-light h-9 flex-shrink-0"
+                        onClick={() => { setSelectedRecord(first ?? null); setShowReject(true); }}
+                      >
+                        <IconXCircle className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </Card>
+
+      {/* Details Modal */}
+      <Modal
+        isOpen={showDetails}
+        onClose={() => setShowDetails(false)}
+        title="Record Details"
+        size="lg"
+      >
+        {selectedRecord && <RecordDetails record={selectedRecord} />}
+        <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-gray-100">
+          <Button variant="outline" onClick={() => setShowDetails(false)}>Close</Button>
+          <Button 
+            className="bg-green-600 hover:bg-green-700 text-white shadow-sm"
+            onClick={() => {
+              approveGroup(selectedRecord?.original_id ?? selectedRecord?.id ?? '');
+              setShowDetails(false);
+            }}
+          >
+            Approve Record
+          </Button>
+        </div>
+      </Modal>
+
+      {/* Reject Modal */}
+      <Modal
+        isOpen={showReject}
+        onClose={() => { setShowReject(false); setRejectReason(''); }}
+        title={selectedIds.size > 0 && !selectedRecord ? `Reject ${selectedIds.size} Submissions` : "Reject Submission"}
+        size="md"
+      >
+        <div className="space-y-4">
+          <div className="bg-error-light text-error p-3 rounded-lg text-sm flex items-start gap-2 border border-error-light">
+            <IconAlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+            <p>
+              {selectedIds.size > 0 && !selectedRecord
+                ? "You are about to reject multiple submissions. This action cannot be undone."
+                : "You are about to reject this submission. Please provide a reason."}
+            </p>
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Rejection Reason *</label>
+            <textarea
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              rows={4}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500/20 focus:border-green-500 transition-all resize-none text-sm"
+              placeholder="e.g., Incorrect stock count, missing details..."
+              autoFocus
+            />
+          </div>
+          
+          <div className="flex justify-end gap-3 mt-4">
+            <Button 
+              variant="outline" 
+              onClick={() => { setShowReject(false); setRejectReason(''); }}
+            >
+              Cancel
+            </Button>
+            <Button 
+              variant="danger"
+              className="border-transparent shadow-sm"
+              onClick={() => {
+                if (selectedIds.size > 0 && !selectedRecord) {
+                  processGroups(Array.from(selectedIds), 'reject', rejectReason);
+                } else {
+                  rejectGroup(selectedRecord?.original_id ?? selectedRecord?.id ?? '');
+                }
+              }}
+              disabled={actionLoading || !rejectReason.trim()}
+            >
+              Confirm Rejection
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

@@ -1,6 +1,32 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
+import { Card } from './ui/Card';
+import { Button } from './ui/Button';
+import { Input } from './ui/Input';
+import { Select } from './ui/Select';
+import { Badge } from './ui/Badge';
+import { Modal } from './ui/Modal';
+import { Checkbox } from './ui/Checkbox';
+import { 
+  Table, 
+  TableHeader, 
+  TableBody, 
+  TableRow, 
+  TableHead, 
+  TableCell 
+} from './ui/Table';
+import { 
+  IconPlus, 
+  IconEdit, 
+  IconCheck, 
+  IconX, 
+  IconLoader, 
+  IconUsers, 
+  IconShield, 
+  IconSearch,
+  IconAlertCircle
+} from './ui/Icons';
 
 interface StaffProfile {
   id: string;
@@ -12,7 +38,15 @@ interface StaffProfile {
   created_at: string;
 }
 
-const ROLES: StaffProfile['role'][] = ['admin','manager','supervisor','front_desk','kitchen','bar','storekeeper'];
+const ROLES: { value: StaffProfile['role']; label: string }[] = [
+  { value: 'admin', label: 'Admin' },
+  { value: 'manager', label: 'Manager' },
+  { value: 'supervisor', label: 'Supervisor' },
+  { value: 'front_desk', label: 'Front Desk' },
+  { value: 'kitchen', label: 'Kitchen' },
+  { value: 'bar', label: 'Bar' },
+  { value: 'storekeeper', label: 'Storekeeper' },
+];
 
 export default function AdminStaffManagement() {
   // Allow all roles to view; RLS ensures staff-only users see only their own profile
@@ -37,8 +71,15 @@ function AdminStaffManagementInner() {
   const [isActive, setIsActive] = useState(true);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  
+  // Search state
+  const [searchTerm, setSearchTerm] = useState('');
 
-  const modalTitle = useMemo(() => (editing ? 'Edit Staff' : 'Add Staff'), [editing]);
+  const modalTitle = useMemo(() => (editing ? 'Edit Staff Member' : 'Add Staff Member'), [editing]);
+
+  const canAdd = isAdmin || isManager;
+  const canEdit = isAdmin || isManager;
+  const isReadOnly = isSupervisor;
 
   useEffect(() => {
     let mounted = true;
@@ -103,7 +144,7 @@ function AdminStaffManagementInner() {
     }
     fetchStaff();
     return () => { mounted = false; };
-  }, []);
+  }, [isAdmin, isManager]); // Added dependencies to re-run if auth role changes
 
   function openAddModal() {
     if (!isAdmin && !isManager) return; // Admin and Manager can add staff
@@ -199,111 +240,227 @@ function AdminStaffManagementInner() {
       setToggleLoadingId(null);
     }
   }
-  const canAdd = isAdmin || isManager;
-  const canEdit = isAdmin || isManager;
-  const isReadOnly = isSupervisor;
+
+  const filteredStaff = useMemo(() => {
+    return staff.filter(s => 
+      s.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      s.role.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (s.department && s.department.toLowerCase().includes(searchTerm.toLowerCase()))
+    );
+  }, [staff, searchTerm]);
 
   return (
-    <div className="page">
-      <h1 className="page-title">Staff Management</h1>
-
-      <div className="toolbar">
-        {canAdd && (
-          <button className="btn btn-primary" onClick={openAddModal}>Add Staff</button>
-        )}
-        {isReadOnly && (
-          <div style={{ marginTop: 8, color: '#555' }}>Read-only (Supervisor)</div>
-        )}
+    <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-6">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 tracking-tight flex items-center gap-2">
+            <IconUsers className="w-6 h-6 text-gray-500" />
+            Staff Management
+          </h1>
+          <p className="text-gray-500 text-sm mt-1">Manage staff profiles, roles, and access</p>
+        </div>
+        
+        <div className="flex items-center gap-2">
+          {canAdd && (
+            <Button onClick={openAddModal} className="gap-2">
+              <IconPlus className="w-4 h-4" />
+              Add Staff
+            </Button>
+          )}
+          {isReadOnly && (
+            <Badge variant="warning" className="flex items-center gap-1">
+              <IconShield className="w-3 h-3" />
+              Read-only Access
+            </Badge>
+          )}
+        </div>
       </div>
 
-      {loading ? (
-        <div className="table-loading">
-          <div className="spinner" aria-label="Loading" />
-          <div>Loading staff...</div>
-        </div>
-      ) : error ? (
-        <div className="error-box">{error}</div>
-      ) : staff.length === 0 ? (
-        <div className="empty-state">No staff profiles found.</div>
-      ) : (
-        <div className="table-wrapper">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Full Name</th>
-                <th>Role</th>
-                <th>Department</th>
-                <th>Status</th>
-                <th>Created</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {staff.map((s) => (
-                <tr key={s.id}>
-                  <td>{s.full_name}</td>
-                  <td>{s.role}</td>
-                  <td>{s.department || '-'}</td>
-                  <td>{s.is_active ? 'Active' : 'Inactive'}</td>
-                  <td>{new Date(s.created_at).toLocaleString()}</td>
-                  <td>
-                    {canEdit ? (
-                      <>
-                        <button className="btn btn-secondary" onClick={() => openEditModal(s)} style={{ marginRight: 8 }}>Edit</button>
-                        <button className="btn" onClick={() => toggleActive(s)} disabled={toggleLoadingId === s.id}>
-                          {toggleLoadingId === s.id ? 'Working...' : s.is_active ? 'Deactivate' : 'Activate'}
-                        </button>
-                      </>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {error && (
+        <div className="bg-error-light border border-error-light text-error px-4 py-3 rounded-md flex items-start gap-2 animate-fadeIn">
+          <IconAlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+          <p>{error}</p>
         </div>
       )}
 
-      {isModalOpen && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <div className="modal">
-            <h2 className="modal-title">{modalTitle}</h2>
-            {formError && <div className="error-box" style={{ marginBottom: 12 }}>{formError}</div>}
-            <div className="form-grid">
-              <label className="form-label">Full name</label>
-              <input className="input" value={fullName} onChange={(e) => setFullName(e.target.value)} disabled={!!editing} />
-
-              <label className="form-label">Role</label>
-              <select className="input" value={role} onChange={(e) => setRole(e.target.value as StaffProfile['role'])} disabled={!(isAdmin || isManager)}>
-                {ROLES.map((r) => (
-                  <option key={r} value={r}>{r}</option>
-                ))}
-              </select>
-
-              <label className="form-label">Department</label>
-              <input className="input" value={department} onChange={(e) => setDepartment(e.target.value)} disabled={!(isAdmin || isManager)} />
-
-              <label className="form-label">User ID (Supabase auth uid)</label>
-              <input className="input" value={userId} onChange={(e) => setUserId(e.target.value)} disabled={!!editing} />
-
-              <label className="form-label">Active</label>
-              <div>
-                <label className="toggle">
-                  <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} disabled={!(isAdmin || isManager)} />
-                  <span>Active</span>
-                </label>
-              </div>
-            </div>
-            <div className="modal-actions">
-              <button className="btn" onClick={() => setIsModalOpen(false)} disabled={saving}>Cancel</button>
-              {isSupervisor ? (
-                <button className="btn" disabled>Save</button>
+      <Card className="overflow-hidden border border-gray-200 shadow-sm">
+        <div className="p-4 border-b border-gray-200 bg-gray-50 flex items-center gap-2">
+          <IconSearch className="w-4 h-4 text-gray-400" />
+          <input 
+            type="text" 
+            placeholder="Search staff by name, role, or department..." 
+            className="bg-transparent border-none focus:ring-0 text-sm w-full text-gray-700 placeholder-gray-400"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+        
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[180px] sticky left-0 z-20 bg-gray-50 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">Full Name</TableHead>
+                <TableHead>Role</TableHead>
+                <TableHead>Department</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Joined</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="h-32 text-center">
+                    <div className="flex flex-col items-center justify-center text-gray-500">
+                      <IconLoader className="w-8 h-8 animate-spin text-green-600 mb-2" />
+                      <p>Loading staff profiles...</p>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : filteredStaff.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="h-32 text-center">
+                    <div className="flex flex-col items-center justify-center text-gray-500">
+                      <IconUsers className="w-12 h-12 text-gray-300 mb-3" />
+                      <p className="text-lg font-medium text-gray-900">No staff found</p>
+                      {searchTerm && <p className="text-sm">Try adjusting your search terms.</p>}
+                    </div>
+                  </TableCell>
+                </TableRow>
               ) : (
-                <button className="btn btn-primary" onClick={handleSave} disabled={saving}>{saving ? 'Saving...' : 'Save'}</button>
+                filteredStaff.map((s) => (
+                  <TableRow key={s.id} className="hover:bg-gray-50/50">
+                    <TableCell className="font-medium text-gray-900">
+                      {s.full_name}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className="capitalize">
+                        {s.role.replace('_', ' ')}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-gray-500">
+                      {s.department || '—'}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={s.is_active ? 'success' : 'default'}>
+                        {s.is_active ? 'Active' : 'Inactive'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-gray-500 text-xs">
+                      {new Date(s.created_at).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {canEdit && (
+                        <div className="flex items-center justify-end gap-2">
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            onClick={() => openEditModal(s)}
+                            title="Edit Staff"
+                          >
+                            <IconEdit className="w-4 h-4 text-gray-500" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => toggleActive(s)}
+                            disabled={toggleLoadingId === s.id}
+                            title={s.is_active ? "Deactivate" : "Activate"}
+                            className={s.is_active ? "text-error hover:text-error hover:bg-error-light" : "text-green-600 hover:text-green-700 hover:bg-green-50"}
+                          >
+                            {toggleLoadingId === s.id ? (
+                              <IconLoader className="w-4 h-4 animate-spin" />
+                            ) : s.is_active ? (
+                              <IconX className="w-4 h-4" />
+                            ) : (
+                              <IconCheck className="w-4 h-4" />
+                            )}
+                          </Button>
+                        </div>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))
               )}
+            </TableBody>
+          </Table>
+        </div>
+      </Card>
+
+      <Modal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        title={modalTitle}
+        size="md"
+      >
+        <div className="space-y-4">
+          {formError && (
+            <div className="bg-error-light border border-error-light text-error px-4 py-3 rounded-md flex items-start gap-2 text-sm">
+              <IconAlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+              <p>{formError}</p>
             </div>
+          )}
+          
+          <Input
+            label="Full Name"
+            value={fullName}
+            onChange={(e) => setFullName(e.target.value)}
+            disabled={!!editing}
+            placeholder="John Doe"
+            helperText={editing ? "Name cannot be changed after creation." : undefined}
+            fullWidth
+          />
+          
+          <Select
+            label="Role"
+            value={role}
+            onChange={(e) => setRole(e.target.value as StaffProfile['role'])}
+            disabled={!canEdit}
+            options={ROLES}
+            fullWidth
+          />
+          
+          <Input
+            label="Department"
+            value={department}
+            onChange={(e) => setDepartment(e.target.value)}
+            disabled={!canEdit}
+            placeholder="e.g. Front Office, Housekeeping"
+            fullWidth
+          />
+          
+          <Input
+            label="User ID (Supabase Auth UID)"
+            value={userId}
+            onChange={(e) => setUserId(e.target.value)}
+            disabled={!!editing}
+            placeholder="uuid-string-here"
+            helperText={editing ? "User ID cannot be changed." : "This links the staff profile to a login account."}
+            fullWidth
+          />
+
+          <div className="pt-2">
+            <Checkbox
+              id="isActive"
+              checked={isActive}
+              onChange={(e) => setIsActive(e.target.checked)}
+              disabled={!canEdit}
+              label="Account is Active"
+            />
+          </div>
+
+          <div className="flex justify-end gap-3 pt-4 border-t border-gray-100 mt-4">
+            <Button variant="ghost" onClick={() => setIsModalOpen(false)} disabled={saving}>
+              Cancel
+            </Button>
+            {!isSupervisor && (
+              <Button onClick={handleSave} disabled={saving} isLoading={saving}>
+                {editing ? 'Save Changes' : 'Create Profile'}
+              </Button>
+            )}
           </div>
         </div>
-      )}
+      </Modal>
     </div>
   );
 }
