@@ -376,6 +376,14 @@ export default function AdminRooms() {
           />
           
           <Input
+            label="Room Name"
+            value={currentRoom.room_name || ''}
+            onChange={(e) => setCurrentRoom(prev => ({ ...prev, room_name: e.target.value }))}
+            placeholder="e.g. Deluxe Ocean View"
+            fullWidth
+          />
+
+          <Input
             label="Room Type"
             value={currentRoom.room_type || ''}
             onChange={(e) => setCurrentRoom(prev => ({ ...prev, room_type: e.target.value }))}

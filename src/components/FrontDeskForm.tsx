@@ -16,6 +16,7 @@ interface RoomOption {
   id: string | number;
   room_number: string;
   room_name?: string;
+  room_type?: string;
   price_per_night: number;
 }
 
@@ -38,6 +39,7 @@ export default function FrontDeskForm() {
   const [check_in, setCheckIn] = useState(toISODate(today));
   const [check_out, setCheckOut] = useState(toISODate(new Date(today.getTime() + 24 * 60 * 60 * 1000))); // +1 day
   const [room_rate, setRoomRate] = useState(0);
+  const [discount_percent, setDiscountPercent] = useState(0);
   const [roomsLoading, setRoomsLoading] = useState(false);
   const [roomsError, setRoomsError] = useState<string | null>(null);
 
@@ -51,7 +53,9 @@ export default function FrontDeskForm() {
     return Math.max(diff, 0);
   }, [check_in, check_out]);
 
-  const total_room_cost = useMemo(() => Number((room_rate * nights).toFixed(2)), [room_rate, nights]);
+  const subtotal = useMemo(() => room_rate * nights, [room_rate, nights]);
+  const discount_amount = useMemo(() => subtotal * (discount_percent / 100), [subtotal, discount_percent]);
+  const total_room_cost = useMemo(() => Number((subtotal - discount_amount).toFixed(2)), [subtotal, discount_amount]);
 
   // Step 2: Guest & Payment
   const [full_name, setFullName] = useState('');
@@ -93,7 +97,7 @@ export default function FrontDeskForm() {
       // Rooms
       const { data: roomData, error: roomErr } = await supabase
         .from('rooms')
-        .select('id, room_number, room_name, price_per_night, is_active')
+        .select('id, room_number, room_name, room_type, price_per_night, is_active')
         .eq('is_active', true)
         .order('room_number', { ascending: true });
       if (mounted) {
@@ -104,6 +108,8 @@ export default function FrontDeskForm() {
           setRooms((roomData ?? []).map((r: any) => ({
             id: r.id,
             room_number: r.room_number,
+            room_name: r.room_name,
+            room_type: r.room_type,
             price_per_night: Number(r.price_per_night) || 0,
           })));
         }
@@ -151,6 +157,7 @@ export default function FrontDeskForm() {
     }
     if (nights <= 0) errs.nights = 'Nights must be at least 1.';
     if (room_rate < 0) errs.room_rate = 'Price per night must be non-negative.';
+    if (discount_percent < 0 || discount_percent > 100) errs.discount_percent = 'Discount must be between 0 and 100.';
     setStep1Errors(errs);
     return Object.keys(errs).length === 0;
   }
@@ -203,7 +210,7 @@ export default function FrontDeskForm() {
       front_desk_staff_id: frontDeskStaffId,
       guest: { full_name, phone, email: email || undefined, id_reference: id_reference || undefined },
       stay: { room_id, check_in, check_out, adults, children },
-      pricing: { room_rate, nights, total_room_cost },
+      pricing: { room_rate, nights, discount_percent, total_room_cost },
       payment: { paid_amount, payment_method, payment_type, payment_date, payment_reference: payment_reference || null, balance },
       meta: { notes: notes || null, created_at_local },
     };
@@ -343,7 +350,7 @@ export default function FrontDeskForm() {
                       <option value="">Choose a room...</option>
                       {rooms.map((r) => (
                         <option key={String(r.id)} value={String(r.id)}>
-                          {r.room_number} — ₦{Number(r.price_per_night).toLocaleString()} / night
+                          {r.room_number} {r.room_name ? `(${r.room_name})` : ''} {r.room_type ? `- ${r.room_type}` : ''} — ₦{Number(r.price_per_night).toLocaleString()} / night
                         </option>
                       ))}
                     </Select>
@@ -367,6 +374,25 @@ export default function FrontDeskForm() {
                         error={step1Errors.check_out}
                         fullWidth
                       />
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                       <Input
+                        type="number"
+                        label="Discount (%)"
+                        value={discount_percent}
+                        onChange={(e) => setDiscountPercent(Number(e.target.value))}
+                        min={0}
+                        max={100}
+                        error={step1Errors.discount_percent}
+                        fullWidth
+                      />
+                      <div className="flex items-center p-4 bg-gray-50 rounded-lg border border-gray-200">
+                        <div className="w-full flex justify-between items-center">
+                          <span className="text-gray-600 font-medium">Total Cost:</span>
+                          <span className="text-xl font-bold text-green-700">₦{total_room_cost.toLocaleString()}</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </Card>

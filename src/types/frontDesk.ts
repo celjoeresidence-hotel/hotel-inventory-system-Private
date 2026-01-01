@@ -19,6 +19,7 @@ export interface StayInfo {
 export interface PricingInfo {
   room_rate: number;
   nights: number;
+  discount_percent?: number;
   total_room_cost: number;
 }
 
