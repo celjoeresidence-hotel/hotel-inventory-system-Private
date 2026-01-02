@@ -28,6 +28,7 @@ import {
   IconLayout
 } from './ui/Icons';
 import { Button } from './ui/Button';
+import UpdateNotification from './UpdateNotification';
 
 export default function AppShell() {
   const { role, logout, user, isAdmin, isManager, isSupervisor } = useAuth();
@@ -247,6 +248,7 @@ export default function AppShell() {
           © {new Date().getFullYear()} Celjoe Residence. All rights reserved.
         </footer>
       </div>
+      <UpdateNotification />
     </div>
   );
 }

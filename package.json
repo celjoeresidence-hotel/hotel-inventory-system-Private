@@ -1,5 +1,8 @@
 {
   "name": "hotel-inventory-system",
+  "productName": "Hotel Inventory System",
+  "description": "Hotel Inventory Management System",
+  "author": "Celjoe Residence Hotel",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -11,6 +14,7 @@
     "electron": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env NODE_ENV=development electron .\"",
     "electron:pack": "electron-builder --dir",
     "electron:dist": "electron-builder",
+    "build:release": "npm run build && electron-builder",
     "package:win": "npm run build && electron-packager . \"Hotel Inventory System\" --platform=win32 --arch=x64 --out=dist-final --icon=build/icon.ico --overwrite --ignore=\"^/(\\.git|\\.cache|src|scripts|dist-electron|dist-packager|dist-app|dist-release|dist-build|dist-final)\""
   },
   "main": "electron/main.cjs",
@@ -31,8 +35,8 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "YOUR_GITHUB_USER",
-      "repo": "YOUR_REPO"
+      "owner": "celjoeresidence-hotel",
+      "repo": "hotel-inventory-system-Private"
     }
   },
   "dependencies": {
@@ -52,7 +56,7 @@
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",
     "electron": "^39.2.7",
-    "electron-builder": "^26.0.12",
+    "electron-builder": "^24.13.3",
     "electron-is-dev": "^3.0.1",
     "electron-packager": "^17.1.2",
     "eslint": "^9.39.1",

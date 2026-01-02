@@ -1,7 +1,11 @@
-const { app, BrowserWindow, shell, globalShortcut } = require('electron');
+const { app, BrowserWindow, shell, globalShortcut, ipcMain } = require('electron');
 const path = require('path');
 const isDev = !app.isPackaged;
 const { autoUpdater } = require('electron-updater');
+
+// Configure autoUpdater
+autoUpdater.autoDownload = false; // Let user decide or we can set to true
+autoUpdater.autoInstallOnAppQuit = true;
 
 let mainWindow;
 let splashWindow;
@@ -151,12 +155,41 @@ app.on('activate', () => {
 });
 
 // Auto-update events
-autoUpdater.on('update-available', () => {
-  // Notify renderer or show dialog
-  console.log('Update available');
+autoUpdater.on('update-available', (info) => {
+  if (mainWindow) {
+    mainWindow.webContents.send('update-available', info);
+  }
 });
 
-autoUpdater.on('update-downloaded', () => {
-  // Notify user to restart
-  console.log('Update downloaded');
+autoUpdater.on('update-downloaded', (info) => {
+  if (mainWindow) {
+    mainWindow.webContents.send('update-downloaded', info);
+  }
+});
+
+autoUpdater.on('error', (err) => {
+  if (mainWindow) {
+    mainWindow.webContents.send('update-error', err.toString());
+  }
+});
+
+autoUpdater.on('download-progress', (progressObj) => {
+    if (mainWindow) {
+        mainWindow.webContents.send('download-progress', progressObj);
+    }
+});
+
+// IPC Handlers for Auto Updater
+ipcMain.handle('check-for-updates', () => {
+    if (!isDev) {
+        autoUpdater.checkForUpdates();
+    }
+});
+
+ipcMain.handle('download-update', () => {
+    autoUpdater.downloadUpdate();
+});
+
+ipcMain.handle('quit-and-install', () => {
+    autoUpdater.quitAndInstall();
 });

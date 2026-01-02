@@ -366,15 +366,28 @@ export default function InventoryItemsTab() {
       if (!supabase) { setError('Supabase is not configured.'); return; }
       
       const ids = Array.from(selectedItemIds);
+      let successCount = 0;
+      let failCount = 0;
+
       // Process sequentially to ensure all are handled
       for (const id of ids) {
         const { error: delErr } = await supabase.rpc('delete_record', { _id: id });
-        if (delErr) console.error(`Failed to delete ${id}`, delErr);
+        if (delErr) {
+            console.error(`Failed to delete ${id}`, delErr);
+            failCount++;
+        } else {
+            successCount++;
+        }
       }
       
       setSelectedItemIds(new Set());
       setItemsReloadKey((k) => k + 1);
-      setMessage(`Successfully deleted ${ids.length} items.`);
+      
+      if (failCount > 0) {
+          setError(`Deleted ${successCount} items. Failed to delete ${failCount} items (they may be in use).`);
+      } else {
+          setMessage(`Successfully deleted ${successCount} items.`);
+      }
     } catch (e: any) {
       setError(typeof e?.message === 'string' ? e.message : 'Unexpected error');
     }
