@@ -7,10 +7,37 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "electron": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env NODE_ENV=development electron .\"",
+    "electron:pack": "electron-builder --dir",
+    "electron:dist": "electron-builder",
+    "package:win": "npm run build && electron-packager . \"Hotel Inventory System\" --platform=win32 --arch=x64 --out=dist-final --icon=build/icon.ico --overwrite --ignore=\"^/(\\.git|\\.cache|src|scripts|dist-electron|dist-packager|dist-app|dist-release|dist-build|dist-final)\""
+  },
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "com.hotel.inventory",
+    "productName": "Hotel Inventory System",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico",
+      "forceCodeSigning": false
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "YOUR_GITHUB_USER",
+      "repo": "YOUR_REPO"
+    }
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.88.0",
+    "electron-updater": "^6.6.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
@@ -22,15 +49,24 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
     "autoprefixer": "^10.4.23",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^39.2.7",
+    "electron-builder": "^26.0.12",
+    "electron-is-dev": "^3.0.1",
+    "electron-packager": "^17.1.2",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
+    "png-to-ico": "^3.0.1",
     "postcss": "^8.5.6",
+    "sharp": "^0.34.5",
     "tailwindcss": "^4.1.18",
     "tailwindcss-animate": "^1.0.7",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.4",
-    "vite": "^7.2.4"
+    "vite": "^7.2.4",
+    "wait-on": "^9.0.3"
   }
 }

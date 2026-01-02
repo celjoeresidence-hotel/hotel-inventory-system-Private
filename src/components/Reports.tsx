@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
+import { useAuth } from '../context/AuthContext';
 import { Card } from './ui/Card';
 import { Input } from './ui/Input';
 import { Select } from './ui/Select';
@@ -46,6 +47,7 @@ interface DetailRecord {
 }
 
 export default function Reports() {
+  const { role: userRole } = useAuth();
   const [queryMode, setQueryMode] = useState<QueryMode>('day');
   const [startDate, setStartDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [endDate, setEndDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
@@ -202,6 +204,18 @@ export default function Reports() {
       .sort((a, b) => b.issued - a.issued); // Sort by usage (issued)
   }, [details, expandedSection]);
 
+  const filteredSummaries = useMemo(() => {
+    if (!userRole) return [];
+    
+    // Admin/Manager/Supervisor see all (or whatever RLS returns)
+    if (['admin', 'manager', 'supervisor'].includes(userRole)) {
+      return summaries;
+    }
+
+    // Others see only their section
+    return summaries.filter(s => s.section === userRole);
+  }, [summaries, userRole]);
+
   return (
     <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-500">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -296,7 +310,7 @@ export default function Reports() {
              </Card>
            ))
         ) : (
-          summaries.map((summary) => (
+          filteredSummaries.map((summary) => (
             <Card 
               key={summary.section} 
               className={`
