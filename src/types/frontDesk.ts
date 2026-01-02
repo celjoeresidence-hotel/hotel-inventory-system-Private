@@ -20,6 +20,8 @@ export interface PricingInfo {
   room_rate: number;
   nights: number;
   discount_percent?: number;
+  discount_amount?: number;
+  original_price?: number;
   total_room_cost: number;
 }
 

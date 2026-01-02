@@ -2,8 +2,9 @@ import { useState } from 'react';
 import type { BookingWithId } from '../hooks/useFrontDesk';
 import { Button } from './ui/Button';
 import { Badge } from './ui/Badge';
-import { IconSearch, IconLogOut } from './ui/Icons';
+import { IconSearch, IconLogOut, IconEye } from './ui/Icons';
 import CheckOutModal from './CheckOutModal';
+import GuestDetailsModal from './GuestDetailsModal';
 
 interface ActiveGuestListProps {
   bookings: BookingWithId[];
@@ -15,6 +16,7 @@ interface ActiveGuestListProps {
 export default function ActiveGuestList({ bookings, loading, onRefresh, readOnly }: ActiveGuestListProps) {
   const [search, setSearch] = useState('');
   const [selectedBooking, setSelectedBooking] = useState<BookingWithId | null>(null);
+  const [detailsBooking, setDetailsBooking] = useState<BookingWithId | null>(null);
 
   const filtered = bookings.filter(b => {
     const term = search.toLowerCase();
@@ -103,19 +105,28 @@ export default function ActiveGuestList({ bookings, loading, onRefresh, readOnly
                           <span className="text-green-600">Paid</span>
                         )}
                       </td>
-                      {!readOnly && (
-                        <td className="px-6 py-4 text-right">
-                          <Button 
-                            variant="outline" 
-                            size="sm"
-                            onClick={() => setSelectedBooking(booking)}
-                            className="hover:bg-red-50 hover:text-red-600 hover:border-red-200"
-                          >
-                            <IconLogOut className="w-4 h-4 mr-2" />
-                            Check Out
-                          </Button>
-                        </td>
-                      )}
+                      <td className="px-6 py-4 text-right">
+                        <div className="flex justify-end gap-2">
+                            <Button 
+                                size="sm" 
+                                variant="outline"
+                                onClick={() => setDetailsBooking(booking)}
+                                title="View Details"
+                            >
+                                <IconEye className="w-4 h-4"/>
+                            </Button>
+                            {!readOnly && (
+                                <Button
+                                size="sm"
+                                onClick={() => setSelectedBooking(booking)}
+                                className="gap-2"
+                                >
+                                <IconLogOut className="w-4 h-4" />
+                                Check Out
+                                </Button>
+                            )}
+                        </div>
+                      </td>
                     </tr>
                   );
                 })
@@ -130,8 +141,17 @@ export default function ActiveGuestList({ bookings, loading, onRefresh, readOnly
         onClose={() => setSelectedBooking(null)}
         booking={selectedBooking}
         onSuccess={() => {
+          setSelectedBooking(null);
           onRefresh();
-          // Optional: Show success toast
+        }}
+      />
+      
+      <GuestDetailsModal
+        isOpen={!!detailsBooking}
+        onClose={() => setDetailsBooking(null)}
+        booking={detailsBooking}
+        onUpdate={() => {
+            onRefresh();
         }}
       />
     </div>

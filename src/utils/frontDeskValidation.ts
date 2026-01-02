@@ -55,10 +55,20 @@ export function validateFrontDeskData(data: FrontDeskRecordData): ValidationResu
       errors.push('Nights must equal the difference between check-in and check-out dates.');
     }
 
-    // total_room_cost = room_rate * nights
-    const expectedTotal = Number((p.room_rate * p.nights).toFixed(2));
+    // total_room_cost = (room_rate * nights) - discount_amount
+    const rawTotal = Number((p.room_rate * p.nights).toFixed(2));
+    const discount = p.discount_amount ? Number(p.discount_amount.toFixed(2)) : 0;
+    const expectedTotal = Number((rawTotal - discount).toFixed(2));
+
     if (Number(p.total_room_cost.toFixed(2)) !== expectedTotal) {
-      errors.push('Total room cost must equal room_rate multiplied by nights.');
+      errors.push('Total room cost must equal (room_rate * nights) - discount_amount.');
+    }
+
+    // If original_price is provided, it must match rawTotal
+    if (p.original_price !== undefined) {
+      if (Number(p.original_price.toFixed(2)) !== rawTotal) {
+        errors.push('Original price must equal room_rate * nights.');
+      }
     }
 
     // balance = total_room_cost - paid_amount

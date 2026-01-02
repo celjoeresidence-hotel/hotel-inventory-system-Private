@@ -25,6 +25,8 @@ import {
   IconList
 } from './ui/Icons';
 
+import { ConfirmationModal } from './ConfirmationModal';
+
 function formatDate(iso: string | null | undefined) {
   if (!iso) return '—';
   try {
@@ -52,6 +54,7 @@ export default function SupervisorInbox() {
   const [actionLoading, setActionLoading] = useState<boolean>(false);
   const [rejectReason, setRejectReason] = useState<string>('');
   const [showReject, setShowReject] = useState<boolean>(false);
+  const [showApproveConfirm, setShowApproveConfirm] = useState<boolean>(false);
   const [successMessage, setSuccessMessage] = useState<string>('');
   
   // Bulk Selection
@@ -188,8 +191,12 @@ export default function SupervisorInbox() {
 
   async function handleBulkApprove() {
     if (selectedIds.size === 0) return;
-    if (!window.confirm(`Approve ${selectedIds.size} selected items?`)) return;
+    setShowApproveConfirm(true);
+  }
+
+  async function confirmBulkApprove() {
     await processGroups(Array.from(selectedIds), 'approve');
+    setShowApproveConfirm(false);
   }
 
   async function processGroups(originalIds: string[], action: 'approve' | 'reject', reason?: string) {
@@ -539,6 +546,18 @@ export default function SupervisorInbox() {
           </Button>
         </div>
       </Modal>
+
+      {/* Modals */}
+      <ConfirmationModal
+        isOpen={showApproveConfirm}
+        onClose={() => setShowApproveConfirm(false)}
+        onConfirm={confirmBulkApprove}
+        title="Approve Items"
+        message={`Are you sure you want to approve ${selectedIds.size} selected items?`}
+        confirmLabel="Approve"
+        confirmVariant="primary"
+        loading={actionLoading}
+      />
 
       {/* Reject Modal */}
       <Modal

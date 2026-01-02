@@ -26,5 +26,11 @@ dist-ssr
 # Electron build artifacts
 dist-*
 release
+release-*
+release-installer*
 .cache
 Hotel-Inventory-System-*
+*.exe
+*.dmg
+*.zip
+*.nupkg

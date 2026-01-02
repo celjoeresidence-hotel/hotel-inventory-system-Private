@@ -24,6 +24,7 @@ import {
   IconCheckCircle,
   IconAlertCircle
 } from './ui/Icons';
+import { DeleteConfirmationModal } from './DeleteConfirmationModal';
 
 interface CategoryRow {
   id: string;
@@ -57,6 +58,10 @@ export default function InventoryItemsTab() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [itemsReloadKey, setItemsReloadKey] = useState<number>(0);
+
+  // Delete Modal
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Categories (for dropdowns)
   const [categories, setCategories] = useState<CategoryRow[]>([]);
@@ -360,8 +365,11 @@ export default function InventoryItemsTab() {
 
   async function handleBulkDelete() {
     if (!canDeleteItem || selectedItemIds.size === 0) return;
-    if (!window.confirm(`Are you sure you want to delete ${selectedItemIds.size} items?`)) return;
-    
+    setShowDeleteConfirm(true);
+  }
+  
+  async function confirmBulkDelete() {
+    setIsDeleting(true);
     try {
       if (!supabase) { setError('Supabase is not configured.'); return; }
       
@@ -390,6 +398,9 @@ export default function InventoryItemsTab() {
       }
     } catch (e: any) {
       setError(typeof e?.message === 'string' ? e.message : 'Unexpected error');
+    } finally {
+        setIsDeleting(false);
+        setShowDeleteConfirm(false);
     }
   }
 
@@ -655,6 +666,15 @@ export default function InventoryItemsTab() {
             currentPage={page}
             totalPages={Math.ceil(filteredItems.length / PAGE_SIZE)}
             onPageChange={setPage}
+        />
+
+        <DeleteConfirmationModal
+            isOpen={showDeleteConfirm}
+            onClose={() => setShowDeleteConfirm(false)}
+            onConfirm={confirmBulkDelete}
+            title="Delete Items"
+            message={`Are you sure you want to delete ${selectedItemIds.size} items? This action cannot be undone.`}
+            loading={isDeleting}
         />
 
         {/* Add Item Modal */}

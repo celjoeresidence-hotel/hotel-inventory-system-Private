@@ -7,6 +7,11 @@ const { autoUpdater } = require('electron-updater');
 autoUpdater.autoDownload = false; // Let user decide or we can set to true
 autoUpdater.autoInstallOnAppQuit = true;
 
+// Set App User Model ID for Windows Taskbar Icon
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.hotel.inventory');
+}
+
 let mainWindow;
 let splashWindow;
 
@@ -61,6 +66,9 @@ function createWindow() {
 
   // Wait for content to finish loading before showing
   mainWindow.once('ready-to-show', () => {
+    // Check for updates
+    autoUpdater.checkForUpdatesAndNotify();
+
     // Add a small delay to ensure the splash screen is seen and UI is painted
     setTimeout(() => {
       if (splashWindow) {

@@ -1,7 +1,7 @@
 import { AuthProvider, useAuth } from './context/AuthContext'
 import Login from './components/Login'
 import AppShell from './components/AppShell'
-import { IconLoader, IconAlertCircle } from './components/ui/Icons'
+import { IconAlertCircle } from './components/ui/Icons'
 
 function Root() {
   const { session, loading, staffId, profileError } = useAuth();
@@ -9,8 +9,11 @@ function Root() {
   if (loading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50">
-        <IconLoader className="w-10 h-10 text-green-600 animate-spin mb-4" />
-        <div className="text-gray-500 font-medium">Loading Hotel System...</div>
+        <div className="relative w-24 h-24 mb-6 flex items-center justify-center">
+          <div className="absolute inset-0 border-4 border-gray-200 border-t-green-600 border-r-green-600 rounded-full animate-spin" />
+          <img src="/celjoe.png" alt="Celjoe" className="w-16 h-16 object-contain rounded-xl relative z-10" />
+        </div>
+        <div className="text-gray-500 font-medium animate-pulse">Loading Hotel System...</div>
       </div>
     );
   }

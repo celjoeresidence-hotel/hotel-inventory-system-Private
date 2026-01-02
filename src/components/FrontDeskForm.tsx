@@ -61,6 +61,56 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [id_reference, setIdReference] = useState('');
+  
+  // Guest Search
+  const [guestSearch, setGuestSearch] = useState('');
+  const [guestSearchResults, setGuestSearchResults] = useState<any[]>([]);
+  const [showGuestResults, setShowGuestResults] = useState(false);
+
+  const handleGuestSearch = async (term: string) => {
+    setGuestSearch(term);
+    if (term.length < 3) {
+        setGuestSearchResults([]);
+        setShowGuestResults(false);
+        return;
+    }
+
+    if (!supabase) {
+      setGuestSearchResults([]);
+      setShowGuestResults(false);
+      return;
+    }
+    const { data } = await supabase!
+        .from('operational_records')
+        .select('data')
+        .or(`data->guest->>full_name.ilike.%${term}%,data->guest->>phone.ilike.%${term}%`)
+        .limit(10);
+    
+    if (data) {
+        // Extract unique guests
+        const uniqueGuests = new Map();
+        data.forEach((rec: any) => {
+            const g = rec.data?.guest;
+            if (g && g.full_name) {
+                if (!uniqueGuests.has(g.phone || g.full_name)) {
+                    uniqueGuests.set(g.phone || g.full_name, g);
+                }
+            }
+        });
+        setGuestSearchResults(Array.from(uniqueGuests.values()));
+        setShowGuestResults(true);
+    }
+  };
+
+  const selectGuest = (g: any) => {
+      setFullName(g.full_name || '');
+      setPhone(g.phone || '');
+      setEmail(g.email || '');
+      setIdReference(g.id_reference || '');
+      setGuestSearch('');
+      setShowGuestResults(false);
+  };
+
   const [adults, setAdults] = useState(1);
   const [children, setChildren] = useState(0);
 
@@ -94,7 +144,7 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
       setRoomsError(null);
       setRoomsLoading(true);
       // Rooms
-      const { data: roomData, error: roomErr } = await supabase
+      const { data: roomData, error: roomErr } = await supabase!
         .from('rooms')
         .select('id, room_number, room_name, room_type, price_per_night, is_active')
         .eq('is_active', true)
@@ -115,7 +165,7 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
       }
       setRoomsLoading(false);
       // Staff options
-      const { data: staffData, error: staffErr } = await supabase
+      const { data: staffData, error: staffErr } = await supabase!
         .from('staff_profiles')
         .select('id, full_name, role, is_active')
         .eq('role', 'front_desk')
@@ -193,7 +243,7 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
     if (!ok2) { setStep(2); return; }
 
     // Enforce authenticated submission
-    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    const { data: sessionData, error: sessionError } = await supabase!.auth.getSession();
     if (sessionError) {
       setError('Authentication check failed. Please try again.');
       return;
@@ -208,7 +258,14 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
       front_desk_staff_id: frontDeskStaffId,
       guest: { full_name, phone, email: email || undefined, id_reference: id_reference || undefined },
       stay: { room_id, check_in, check_out, adults, children },
-      pricing: { room_rate, nights, discount_percent, total_room_cost },
+      pricing: { 
+        room_rate, 
+        nights, 
+        discount_percent, 
+        discount_amount: Number(discount_amount.toFixed(2)),
+        original_price: Number(subtotal.toFixed(2)),
+        total_room_cost 
+      },
       payment: { paid_amount, payment_method, payment_type, payment_date, payment_reference: payment_reference || null, balance },
       meta: { notes: notes || null, created_at_local },
     };
@@ -222,7 +279,7 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
     setSubmitting(true);
     try {
       // Insert room_booking record first
-      const { data: roomRec, error: insertError1 } = await supabase
+      const { data: roomRec, error: insertError1 } = await supabase!
         .from('operational_records')
         .insert({
           entity_type: 'front_desk',
@@ -246,7 +303,7 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
         meta: { notes: notes || null, created_at_local },
       };
 
-      const { error: insertError2 } = await supabase
+      const { error: insertError2 } = await supabase!
         .from('operational_records')
         .insert({
           entity_type: 'front_desk',
@@ -406,6 +463,39 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
                       <div className="flex items-center gap-2 mb-6 border-b border-gray-100 pb-4">
                         <IconUser className="w-5 h-5 text-gray-500" />
                         <h3 className="text-lg font-semibold text-gray-800">Guest Information</h3>
+                      </div>
+
+                      {/* Repeat Guest Search */}
+                      <div className="relative bg-blue-50 p-4 rounded-lg border border-blue-100 mb-6">
+                          <label className="block text-sm font-medium text-blue-800 mb-1">Returning Guest Lookup</label>
+                          <div className="relative">
+                              <input
+                                  type="text"
+                                  value={guestSearch}
+                                  onChange={(e) => handleGuestSearch(e.target.value)}
+                                  placeholder="Search by name or phone to auto-fill..."
+                                  className="w-full pl-10 pr-4 py-2 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                              />
+                              <IconUser className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400 w-4 h-4" />
+                          </div>
+                          {showGuestResults && guestSearchResults.length > 0 && (
+                              <div className="absolute top-full left-0 right-0 z-20 bg-white shadow-xl rounded-lg border mt-1 max-h-60 overflow-y-auto">
+                                  {guestSearchResults.map((g, i) => (
+                                      <button
+                                          key={i}
+                                          type="button"
+                                          onClick={() => selectGuest(g)}
+                                          className="w-full text-left p-3 hover:bg-gray-50 border-b last:border-0 flex justify-between items-center"
+                                      >
+                                          <div>
+                                              <div className="font-bold text-gray-800">{g.full_name}</div>
+                                              <div className="text-xs text-gray-500">{g.phone} • {g.email}</div>
+                                          </div>
+                                          <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">Select</span>
+                                      </button>
+                                  ))}
+                              </div>
+                          )}
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

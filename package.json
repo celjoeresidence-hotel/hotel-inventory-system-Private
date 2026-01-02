@@ -4,7 +4,7 @@
   "description": "Hotel Inventory Management System",
   "author": "Celjoe Residence Hotel",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.0.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,14 +15,14 @@
     "electron:pack": "electron-builder --dir",
     "electron:dist": "electron-builder",
     "build:release": "npm run build && electron-builder",
-    "package:win": "npm run build && electron-packager . \"Hotel Inventory System\" --platform=win32 --arch=x64 --out=dist-final --icon=build/icon.ico --overwrite --ignore=\"^/(\\.git|\\.cache|src|scripts|dist-electron|dist-packager|dist-app|dist-release|dist-build|dist-final)\""
+    "package:win": "npm run build && electron-packager . \"Hotel Inventory System\" --platform=win32 --arch=x64 --out=dist-win --icon=build/icon.ico --overwrite --ignore=\"^/(\\.git|\\.cache|src|scripts|dist-electron|dist-packager|dist-app|dist-release|dist-build|dist-final|dist-final-2|dist-win|release.*)\""
   },
   "main": "electron/main.cjs",
   "build": {
     "appId": "com.hotel.inventory",
     "productName": "Hotel Inventory System",
     "directories": {
-      "output": "release"
+      "output": "release-installer-4"
     },
     "files": [
       "dist/**/*",
@@ -30,8 +30,9 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "build/icon.ico",
-      "forceCodeSigning": false
+      "icon": "build/icon.png",
+      "forceCodeSigning": false,
+      "verifyUpdateCodeSignature": false
     },
     "publish": {
       "provider": "github",
@@ -41,6 +42,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.88.0",
+    "date-fns": "^4.1.0",
     "electron-updater": "^6.6.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
