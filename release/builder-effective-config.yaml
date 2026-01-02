@@ -1,0 +1,18 @@
+directories:
+  output: release
+  buildResources: build
+appId: com.hotel.inventory
+productName: Hotel Inventory System
+files:
+  - filter:
+      - dist/**/*
+      - electron/**/*
+win:
+  target: nsis
+  icon: build/icon.ico
+  forceCodeSigning: false
+publish:
+  provider: github
+  owner: celjoeresidence-hotel
+  repo: hotel-inventory-system-Private
+electronVersion: 39.2.7

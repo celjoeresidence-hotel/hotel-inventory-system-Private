@@ -4,7 +4,7 @@
   "description": "Hotel Inventory Management System",
   "author": "Celjoe Residence Hotel",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -22,7 +22,7 @@
     "appId": "com.hotel.inventory",
     "productName": "Hotel Inventory System",
     "directories": {
-      "output": "dist-electron"
+      "output": "release"
     },
     "files": [
       "dist/**/*",

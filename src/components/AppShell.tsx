@@ -29,6 +29,7 @@ import {
 } from './ui/Icons';
 import { Button } from './ui/Button';
 import UpdateNotification from './UpdateNotification';
+import logo from '../assets/logo.svg';
 
 export default function AppShell() {
   const { role, logout, user, isAdmin, isManager, isSupervisor } = useAuth();
@@ -166,7 +167,7 @@ export default function AppShell() {
   const NavContent = () => (
     <>
       <div className="h-16 flex items-center px-6 border-b border-gray-200 font-bold text-green-700 text-xl gap-3 bg-white">
-        <img src="https://ik.imagekit.io/t48u898g8/CCCJ__1_-1-removebg-preview.svg" alt="Brand" className="w-8 h-8" />
+        <img src={logo} alt="Brand" className="w-8 h-8" />
         <span>Hotel IMS</span>
       </div>
       <nav className="p-3 flex-1 overflow-y-auto space-y-1">
