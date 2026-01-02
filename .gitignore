@@ -25,5 +25,6 @@ dist-ssr
 
 # Electron build artifacts
 dist-*
+release
 .cache
 Hotel-Inventory-System-*
