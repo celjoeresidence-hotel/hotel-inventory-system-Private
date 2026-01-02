@@ -1,41 +1,51 @@
 import { useState } from 'react';
-import FrontDeskForm from './FrontDeskForm';
-import RoomBookingForm from './RoomBookingForm';
 import { useFrontDesk } from '../hooks/useFrontDesk';
 import RoomStatusGrid from './RoomStatusGrid';
 import ActiveGuestList from './ActiveGuestList';
 import FrontDeskStats from './FrontDeskStats';
 import FrontDeskHistory from './FrontDeskHistory';
+import FrontDeskAnalyticsView from './FrontDeskAnalyticsView';
+import AuditLog from './AuditLog';
 import { Button } from './ui/Button';
-import { IconLayout, IconUserCheck, IconUsers, IconHistory, IconCalendar, IconRefresh } from './ui/Icons';
+import { 
+  IconLayout, 
+  IconUsers, 
+  IconHistory, 
+  IconRefresh, 
+  IconBarChart,
+  IconShield
+} from './ui/Icons';
 
-type Tab = 'dashboard' | 'checkin' | 'guests' | 'history' | 'reservations';
+type FrontDeskOversightRole = 'supervisor' | 'manager' | 'admin';
+type Tab = 'dashboard' | 'guests' | 'history' | 'analytics' | 'audit';
 
-export default function FrontDeskDashboard() {
+interface FrontDeskOversightProps {
+  role: FrontDeskOversightRole;
+}
+
+export default function FrontDeskOversight({ role }: FrontDeskOversightProps) {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
-  const { rooms, activeBookings, pastBookings, loading, refresh } = useFrontDesk();
+  const { rooms, activeBookings, pastBookings, checkoutRecords, loading, refresh } = useFrontDesk();
 
-  const handleCheckInSuccess = () => {
-    refresh();
-    setActiveTab('dashboard');
-  };
+  const canViewAnalytics = role === 'manager' || role === 'admin';
+  const canViewAudit = role === 'admin';
 
   return (
     <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Front Desk</h1>
-          <p className="text-gray-500">Hotel Management System</p>
+          <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Front Desk Oversight</h1>
+          <p className="text-gray-500">
+            {role === 'supervisor' && 'Supervisor View (Read-Only)'}
+            {role === 'manager' && 'Manager View (Analytics & Oversight)'}
+            {role === 'admin' && 'Admin View (Full Oversight & Audit)'}
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <Button variant="outline" onClick={refresh} disabled={loading} className="gap-2">
             <IconRefresh className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh Data
-          </Button>
-          <Button onClick={() => setActiveTab('checkin')} className="bg-green-600 hover:bg-green-700 text-white shadow-sm">
-            <IconUserCheck className="w-4 h-4 mr-2" />
-            New Check-In
           </Button>
         </div>
       </div>
@@ -69,17 +79,6 @@ export default function FrontDeskDashboard() {
             </span>
           </button>
           <button
-            onClick={() => setActiveTab('reservations')}
-            className={`pb-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
-              activeTab === 'reservations'
-                ? 'border-green-600 text-green-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
-            <IconCalendar className="w-5 h-5" />
-            Reservations
-          </button>
-          <button
             onClick={() => setActiveTab('history')}
             className={`pb-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
               activeTab === 'history'
@@ -90,17 +89,34 @@ export default function FrontDeskDashboard() {
             <IconHistory className="w-5 h-5" />
             History
           </button>
-          <button
-            onClick={() => setActiveTab('checkin')}
-            className={`pb-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
-              activeTab === 'checkin'
-                ? 'border-green-600 text-green-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
-            <IconUserCheck className="w-5 h-5" />
-            Check In
-          </button>
+          
+          {canViewAnalytics && (
+            <button
+              onClick={() => setActiveTab('analytics')}
+              className={`pb-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
+                activeTab === 'analytics'
+                  ? 'border-green-600 text-green-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              <IconBarChart className="w-5 h-5" />
+              Analytics
+            </button>
+          )}
+
+          {canViewAudit && (
+             <button
+              onClick={() => setActiveTab('audit')}
+              className={`pb-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
+                activeTab === 'audit'
+                  ? 'border-green-600 text-green-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              <IconShield className="w-5 h-5" />
+              Audit Log
+            </button>
+          )}
         </nav>
       </div>
 
@@ -124,15 +140,15 @@ export default function FrontDeskDashboard() {
                   View All Guests
                 </Button>
               </div>
-              <ActiveGuestList bookings={activeBookings.slice(0, 5)} loading={loading} onRefresh={refresh} />
+              <ActiveGuestList bookings={activeBookings.slice(0, 5)} loading={loading} onRefresh={refresh} readOnly={true} />
             </div>
           </div>
         )}
 
         {activeTab === 'guests' && (
           <div className="space-y-6">
-            <h2 className="text-xl font-bold text-gray-900">Guest Management</h2>
-            <ActiveGuestList bookings={activeBookings} loading={loading} onRefresh={refresh} />
+            <h2 className="text-xl font-bold text-gray-900">Guest Management (Read-Only)</h2>
+            <ActiveGuestList bookings={activeBookings} loading={loading} onRefresh={refresh} readOnly={true} />
           </div>
         )}
 
@@ -143,17 +159,21 @@ export default function FrontDeskDashboard() {
           </div>
         )}
 
-        {activeTab === 'reservations' && (
-          <div className="max-w-4xl mx-auto">
-             <h2 className="text-xl font-bold text-gray-900 mb-6">Room Booking (Future)</h2>
-            <RoomBookingForm />
+        {activeTab === 'analytics' && canViewAnalytics && (
+          <div className="space-y-6">
+            <h2 className="text-xl font-bold text-gray-900">Financial & Performance Analytics</h2>
+            <FrontDeskAnalyticsView 
+              checkoutRecords={checkoutRecords} 
+              pastBookings={pastBookings}
+              totalRooms={rooms.length}
+            />
           </div>
         )}
 
-        {activeTab === 'checkin' && (
-          <div className="max-w-4xl mx-auto">
-            <FrontDeskForm onSuccess={handleCheckInSuccess} />
-          </div>
+        {activeTab === 'audit' && canViewAudit && (
+           <div className="space-y-6">
+             <AuditLog />
+           </div>
         )}
       </div>
     </div>

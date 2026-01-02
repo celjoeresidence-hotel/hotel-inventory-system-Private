@@ -25,13 +25,12 @@ interface StaffOption {
   full_name: string;
 }
 
-export default function FrontDeskForm() {
+export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void }) {
   const { role, staffId, isConfigured } = useAuth();
   const today = useMemo(() => new Date(), []);
 
   // Wizard step state
   const [step, setStep] = useState<1 | 2>(1);
-  const [locked, setLocked] = useState(false);
 
   // Step 1: Room Booking
   const [room_id, setRoomId] = useState('');
@@ -180,7 +179,6 @@ export default function FrontDeskForm() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (locked) return;
     setError(null);
 
     if (!isSupabaseConfigured || !supabase) {
@@ -229,7 +227,7 @@ export default function FrontDeskForm() {
         .insert({
           entity_type: 'front_desk',
           data: payload,
-          financial_amount: payload.pricing.total_room_cost,
+          financial_amount: total_room_cost,
           // status defaults to pending via trigger
         })
         .select()
@@ -258,8 +256,11 @@ export default function FrontDeskForm() {
         });
       if (insertError2) throw insertError2;
 
-      // success message handled by locked state instead
-      setLocked(true);
+      // Success
+      if (onSuccess) onSuccess();
+      // Reset form
+      setStep(1);
+      setRoomId('');
     } catch (err: any) {
       setError(err.message || 'An unexpected error occurred.');
     } finally {
@@ -288,8 +289,7 @@ export default function FrontDeskForm() {
         </div>
       </div>
 
-      {!locked ? (
-        <form onSubmit={handleSubmit} className="space-y-6">
+      <form onSubmit={handleSubmit} className="space-y-6">
           {/* Progress Steps */}
           <div className="flex items-center justify-center mb-8">
             <div className={`flex items-center gap-3 transition-colors duration-300 ${step === 1 ? 'text-green-600' : 'text-gray-400'}`}>
@@ -652,23 +652,6 @@ export default function FrontDeskForm() {
             </div>
           </div>
         </form>
-      ) : (
-        <Card className="text-center py-16 animate-in zoom-in-50 duration-500">
-           <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6">
-             <IconCheckCircle className="w-10 h-10" />
-           </div>
-           <h2 className="text-3xl font-bold text-gray-900 mb-2">Check-In Successful!</h2>
-           <p className="text-gray-500 mb-8">The guest has been checked in and the room is now occupied.</p>
-           
-           <Button 
-             onClick={() => window.location.reload()} 
-             className="min-w-[200px]"
-             size="lg"
-           >
-             Process Another Guest
-           </Button>
-        </Card>
-      )}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import FrontDeskDashboard from './FrontDeskDashboard';
+import FrontDeskOversight from './FrontDeskOversight';
 import { useAuth } from '../context/AuthContext';
 import SupervisorInbox from './SupervisorInbox';
 import AdminRooms from './AdminRooms';
@@ -23,7 +24,8 @@ import {
   IconLogOut, 
   IconMenu,
   IconHistory,
-  IconClipboardList
+  IconClipboardList,
+  IconLayout
 } from './ui/Icons';
 import { Button } from './ui/Button';
 
@@ -36,6 +38,7 @@ export default function AppShell() {
     if (isAdmin) {
       return [
         { key: 'rooms', label: 'Rooms', icon: <IconDashboard size={20} /> },
+        { key: 'front_desk_oversight', label: 'Front Desk Oversight', icon: <IconLayout size={20} /> },
         { key: 'staff', label: 'Staff Management', icon: <IconUsers size={20} /> },
         { key: 'financials', label: 'Financial Reports', icon: <IconFileText size={20} /> },
         { key: 'reports', label: 'Daily Reports', icon: <IconClipboardList size={20} /> },
@@ -47,6 +50,7 @@ export default function AppShell() {
     if (isManager) {
       return [
         { key: 'manager', label: 'Manager Dashboard', icon: <IconDashboard size={20} /> },
+        { key: 'front_desk_oversight', label: 'Front Desk Oversight', icon: <IconLayout size={20} /> },
         { key: 'financials', label: 'Financial Reports', icon: <IconFileText size={20} /> },
         { key: 'staff', label: 'Staff Management', icon: <IconUsers size={20} /> },
         { key: 'reports', label: 'Daily Reports', icon: <IconClipboardList size={20} /> },
@@ -58,6 +62,7 @@ export default function AppShell() {
     if (isSupervisor) {
       return [
         { key: 'pending_approvals', label: 'Pending Approvals', icon: <IconCheckSquare size={20} /> },
+        { key: 'front_desk_monitor', label: 'Front Desk Monitor', icon: <IconLayout size={20} /> },
         { key: 'staff', label: 'Staff Management', icon: <IconUsers size={20} /> },
         { key: 'reports', label: 'Daily Reports', icon: <IconClipboardList size={20} /> },
         { key: 'inventory_setup', label: 'Inventory Setup', icon: <IconSettings size={20} /> },
@@ -96,7 +101,7 @@ export default function AppShell() {
   function renderContent() {
     if (isAdmin) {
       if (activeKey === 'rooms') return <AdminRooms />;
-      if (activeKey === 'staff') return <AdminStaffManagement />;
+      if (activeKey === 'front_desk_oversight') return <FrontDeskOversight role="admin" />;
       if (activeKey === 'financials') return <ManagerFinancials />;
       if (activeKey === 'inventory_catalog') return <InventoryCatalog />;
       if (activeKey === 'inventory_setup') return <InventorySetup />;
@@ -106,6 +111,7 @@ export default function AppShell() {
     }
     if (isManager) {
       if (activeKey === 'manager') return <ManagerDashboard />;
+      if (activeKey === 'front_desk_oversight') return <FrontDeskOversight role="manager" />;
       if (activeKey === 'financials') return <ManagerFinancials />;
       if (activeKey === 'staff') return <AdminStaffManagement />;
       if (activeKey === 'inventory_catalog') return <InventoryCatalog />;
@@ -116,6 +122,7 @@ export default function AppShell() {
     }
     if (isSupervisor) {
       if (activeKey === 'pending_approvals') return <SupervisorInbox />;
+      if (activeKey === 'front_desk_monitor') return <FrontDeskOversight role="supervisor" />;
       if (activeKey === 'staff') return <AdminStaffManagement />;
       if (activeKey === 'inventory_setup') return <InventorySetup />;
       if (activeKey === 'inventory_catalog') return <InventoryCatalog />;
@@ -143,6 +150,17 @@ export default function AppShell() {
         );
     }
   }
+
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  const handleLogout = async () => {
+    try {
+      setIsLoggingOut(true);
+      await logout();
+    } finally {
+      setIsLoggingOut(false);
+    }
+  };
 
   const NavContent = () => (
     <>
@@ -173,7 +191,15 @@ export default function AppShell() {
         <div className="text-xs font-medium text-gray-500 mb-3 px-1">
           Signed in as <strong className="text-gray-900">{user?.email?.split('@')[0]}</strong>
         </div>
-        <Button variant="outline" size="sm" onClick={logout} className="w-full justify-center bg-white hover:bg-error-light hover:text-error hover:border-error-light transition-colors">
+        <Button 
+          variant="outline" 
+          size="sm" 
+          onClick={handleLogout} 
+          disabled={isLoggingOut}
+          isLoading={isLoggingOut}
+          type="button"
+          className="w-full justify-center bg-white hover:bg-error-light hover:text-error hover:border-error-light transition-colors"
+        >
           <IconLogOut className="w-4 h-4 mr-2" />
           Sign out
         </Button>

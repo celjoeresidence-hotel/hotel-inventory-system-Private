@@ -169,10 +169,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function logout() {
     if (!isConfigured) return;
     try {
-      await supabase!.auth.signOut();
+      // Attempt to sign out from the server
+      const { error } = await supabase!.auth.signOut();
+      if (error) throw error;
     } catch (e: any) {
-      // Swallow network AbortError or other non-critical errors
-      if (typeof e?.message === 'string') {
+      // Ignore network errors or aborts during logout as we're clearing local state anyway
+      const isNetworkError = e?.message?.includes('network') || e?.message?.includes('abort') || e?.message?.includes('fetch');
+      if (!isNetworkError && typeof e?.message === 'string') {
         console.warn('Logout warning:', e.message);
       }
     }
