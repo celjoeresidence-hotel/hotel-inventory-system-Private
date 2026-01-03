@@ -104,7 +104,7 @@ export default function CheckOutModal({ isOpen, onClose, booking, onSuccess }: C
         .insert({
           entity_type: 'front_desk',
           data: checkoutPayload,
-          financial_amount: calculations.balance, // Revenue realized now
+          financial_amount: Math.max(0, calculations.balance), // Ensure non-negative to satisfy DB constraint
           submitted_by: staffId, 
           status: 'approved' // Migration 0013 allows this
         });
