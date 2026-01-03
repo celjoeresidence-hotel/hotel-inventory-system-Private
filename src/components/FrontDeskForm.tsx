@@ -139,31 +139,9 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
   // Load rooms (active only) and staff options
   useEffect(() => {
     let mounted = true;
-    async function fetchRoomsAndStaff() {
+    async function fetchStaff() {
       if (!isConfigured || !supabase) return;
-      setRoomsError(null);
-      setRoomsLoading(true);
-      // Rooms
-      const { data: roomData, error: roomErr } = await supabase!
-        .from('rooms')
-        .select('id, room_number, room_name, room_type, price_per_night, is_active')
-        .eq('is_active', true)
-        .order('room_number', { ascending: true });
-      if (mounted) {
-        if (roomErr) {
-          setRoomsError(roomErr.message);
-          setRooms([]);
-        } else {
-          setRooms((roomData ?? []).map((r: any) => ({
-            id: r.id,
-            room_number: r.room_number,
-            room_name: r.room_name,
-            room_type: r.room_type,
-            price_per_night: Number(r.price_per_night) || 0,
-          })));
-        }
-      }
-      setRoomsLoading(false);
+      
       // Staff options
       const { data: staffData, error: staffErr } = await supabase!
         .from('staff_profiles')
@@ -181,9 +159,56 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
         }
       }
     }
-    fetchRoomsAndStaff();
+    fetchStaff();
     return () => { mounted = false; };
   }, [isConfigured, role, staffId]);
+
+  // Fetch available rooms when dates change
+  useEffect(() => {
+    let mounted = true;
+    async function fetchAvailableRooms() {
+        if (!isConfigured || !supabase) return;
+        setRoomsLoading(true);
+        setRoomsError(null);
+        
+        try {
+            // If invalid dates, don't fetch or show empty
+            const start = new Date(check_in);
+            const end = new Date(check_out);
+            if (!check_in || !check_out || isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) {
+                if (mounted) setRooms([]);
+                return;
+            }
+
+            const { data, error } = await supabase
+                .rpc('get_available_rooms', { 
+                    _check_in: check_in, 
+                    _check_out: check_out 
+                });
+            
+            if (mounted) {
+                if (error) {
+                    setRoomsError(error.message);
+                    setRooms([]);
+                } else {
+                    setRooms((data ?? []).map((r: any) => ({
+                        id: r.id,
+                        room_number: r.room_number,
+                        room_name: r.room_name,
+                        room_type: r.room_type,
+                        price_per_night: Number(r.price_per_night) || 0,
+                    })));
+                }
+            }
+        } catch (err: any) {
+             if (mounted) setRoomsError(err.message);
+        } finally {
+             if (mounted) setRoomsLoading(false);
+        }
+    }
+    fetchAvailableRooms();
+    return () => { mounted = false; };
+  }, [isConfigured, check_in, check_out]);
 
   // When room changes, set rate from selection
   useEffect(() => {

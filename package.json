@@ -4,7 +4,7 @@
   "description": "Hotel Inventory Management System",
   "author": "Celjoe Residence Hotel",
   "private": true,
-  "version": "0.0.4",
+  "version": "0.0.5",
   "type": "module",
   "scripts": {
     "dev": "vite",

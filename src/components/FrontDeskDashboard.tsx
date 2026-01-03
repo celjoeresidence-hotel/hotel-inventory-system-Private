@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import FrontDeskForm from './FrontDeskForm';
-import RoomBookingForm from './RoomBookingForm';
 import { useFrontDesk } from '../hooks/useFrontDesk';
 import RoomStatusGrid from './RoomStatusGrid';
 import ActiveGuestList from './ActiveGuestList';
@@ -8,6 +7,7 @@ import FrontDeskStats from './FrontDeskStats';
 import FrontDeskHistory from './FrontDeskHistory';
 import { Button } from './ui/Button';
 import { IconLayout, IconUserCheck, IconUsers, IconHistory, IconCalendar, IconRefresh } from './ui/Icons';
+import ReservationList from './ReservationList';
 
 type Tab = 'dashboard' | 'checkin' | 'guests' | 'history' | 'reservations';
 
@@ -144,9 +144,8 @@ export default function FrontDeskDashboard() {
         )}
 
         {activeTab === 'reservations' && (
-          <div className="max-w-4xl mx-auto">
-             <h2 className="text-xl font-bold text-gray-900 mb-6">Room Booking (Future)</h2>
-            <RoomBookingForm />
+          <div className="max-w-6xl mx-auto">
+             <ReservationList />
           </div>
         )}
 

@@ -279,56 +279,6 @@ export default function StorekeeperStockForm() {
     return out;
   };
 
-  async function computeOpeningForItem(itemName: string, isoDate: string): Promise<number> {
-    if (!supabase) return 0
-    
-    // 1. Get latest opening_stock record
-    const { data: osRows } = await supabase
-      .from('operational_records')
-      .select('id, data, status, created_at, deleted_at')
-      .eq('status', 'approved')
-      .is('deleted_at', null)
-      .filter('data->>type', 'eq', 'opening_stock')
-      .filter('data->>item_name', 'eq', itemName)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      
-    const baselineRecord = osRows && osRows.length > 0 ? osRows[0] : null
-    const baselineQty = baselineRecord ? (typeof baselineRecord.data?.quantity === 'number' ? baselineRecord.data.quantity : Number(baselineRecord.data?.quantity ?? 0)) : 0
-    const baselineDateStr = baselineRecord ? (baselineRecord.data?.date ?? baselineRecord.created_at) : '1970-01-01'
-    const baselineDate = new Date(baselineDateStr).toISOString().slice(0, 10)
-
-    // 2. Fetch all transactions for this item (restock/issued)
-    const { data: txRows } = await supabase
-      .from('operational_records')
-      .select('id, data, original_id, version_no, created_at, status, deleted_at')
-      .eq('status', 'approved')
-      .is('deleted_at', null)
-      .in('data->>type', ['stock_restock', 'stock_issued'])
-      .filter('data->>item_name', 'eq', itemName)
-      .order('created_at', { ascending: false })
-
-    const uniqueTx = dedupLatest(txRows ?? [])
-    
-    let sumRestock = 0
-    let sumIssued = 0
-    
-    for (const tx of uniqueTx) {
-      const txDate = tx.data?.date ?? tx.created_at.slice(0, 10)
-      
-      // Only count transactions that are:
-      // 1. After or on the baseline date (if baseline exists)
-      // 2. Strictly BEFORE the current target date (isoDate)
-      if (txDate >= baselineDate && txDate < isoDate) {
-        const qty = Number(tx.data?.quantity ?? 0)
-        if (tx.data?.type === 'stock_restock') sumRestock += qty
-        else if (tx.data?.type === 'stock_issued') sumIssued += qty
-      }
-    }
-
-    return Math.max(0, baselineQty + sumRestock - sumIssued)
-  }
-
   // Fetch items and compute opening stock per item
   useEffect(() => {
     if (activeTab !== 'daily') return
@@ -337,6 +287,8 @@ export default function StorekeeperStockForm() {
       setLoadingItems(true)
       try {
         if (!isConfigured || !session || !supabase || !activeCategory) { setItems([]); return }
+        
+        // 1. Fetch config items
         let q = supabase
           .from('operational_records')
           .select('id, data, original_id, version_no, created_at, status, deleted_at')
@@ -350,6 +302,7 @@ export default function StorekeeperStockForm() {
         }
         const { data, error } = await q
         if (error) { setError(error.message); return }
+        
         const latestByOriginal = new Map<string, any>()
         for (const r of (data ?? [])) {
           const key = String((r as any)?.original_id ?? (r as any)?.id)
@@ -362,17 +315,43 @@ export default function StorekeeperStockForm() {
             latestByOriginal.set(key, r)
           }
         }
+        
         const base = Array.from(latestByOriginal.values())
           .map((r: any) => ({ item_name: String(r?.data?.item_name ?? ''), unit: r?.data?.unit ?? null }))
           .filter((it: any) => it.item_name)
+
+        // 2. Fetch opening stocks from Ledger RPC
+        // The RPC returns all items for the department. We can filter in memory or rely on the map.
+        const { data: openingData, error: openingError } = await supabase
+          .rpc('get_inventory_opening_at_date', { 
+            _department: 'STORE', 
+            _date: date 
+          })
+        
+        if (openingError) {
+          console.error('Error fetching opening stock:', openingError)
+          // Fallback to 0 if RPC fails, but log it.
+        }
+
+        const openingMap = new Map<string, number>()
+        if (openingData) {
+          for (const row of (openingData as any[])) {
+            openingMap.set(row.item_name, Number(row.opening_stock ?? 0))
+          }
+        }
+
         const computed: UIItem[] = []
         for (const it of base) {
-          const opening = await computeOpeningForItem(it.item_name, date)
+          // If the item is in the openingMap, use that value. Otherwise 0.
+          // Note: The RPC handles "closing stock of yesterday = opening of today".
+          const opening = openingMap.get(it.item_name) ?? 0
           computed.push({ item_name: it.item_name, unit: it.unit ?? null, opening_stock: opening })
         }
+        
         // Sort by item name
         computed.sort((a, b) => a.item_name.localeCompare(b.item_name))
         setItems(computed)
+        
         const rmap: Record<string, number> = {}; const imap: Record<string, number> = {}; const nmap: Record<string, string> = {}
         for (const it of computed) { rmap[it.item_name] = 0; imap[it.item_name] = 0; nmap[it.item_name] = '' }
         setRestockedMap(rmap)

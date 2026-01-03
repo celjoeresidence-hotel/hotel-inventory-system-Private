@@ -229,10 +229,9 @@ export default function GuestDetailsModal({ isOpen, onClose, booking, onUpdate }
     if (!recordToDelete) return;
     try {
         setLoading(true);
+        // Use the soft-delete RPC instead of hard delete
         const { error } = await supabase!
-            .from('operational_records')
-            .delete()
-            .eq('id', recordToDelete.id);
+            .rpc('delete_record', { _id: recordToDelete.id });
         
         if (error) throw error;
         
@@ -242,7 +241,7 @@ export default function GuestDetailsModal({ isOpen, onClose, booking, onUpdate }
         onUpdate();
     } catch (err) {
         console.error('Error deleting record:', err);
-        alert('Failed to delete record. Note: Only Admins can delete records.');
+        alert('Failed to delete record. Note: Only Admins/Managers can delete records.');
     } finally {
         setLoading(false);
     }

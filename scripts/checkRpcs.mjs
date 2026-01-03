@@ -58,6 +58,12 @@ async function testApiRpc(name, args) {
   checks.push(await testPublicRpc('delete_config_category', { _id: id }));
   checks.push(await testPublicRpc('delete_config_collection', { _id: id }));
   checks.push(await testPublicRpc('delete_config_item', { _id: id }));
+  // New RPCs
+  checks.push(await testPublicRpc('delete_record', { _id: id }));
+  checks.push(await testPublicRpc('get_daily_report_details', { _department: 'kitchen', _date: '2024-01-01' }));
+  checks.push(await testPublicRpc('get_room_analytics', { _start_date: '2024-01-01', _end_date: '2024-01-31' }));
+  checks.push(await testPublicRpc('get_admin_dashboard_stats', {}));
+  checks.push(await testPublicRpc('get_admin_dashboard_intelligence', { _start_date: '2024-01-01', _end_date: '2024-01-31' }));
   // API schema functions (likely not callable from client)
   checks.push(await testApiRpc('soft_delete_record', { _id: id }));
   checks.push(await testApiRpc('hard_delete_record', { _id: id }));

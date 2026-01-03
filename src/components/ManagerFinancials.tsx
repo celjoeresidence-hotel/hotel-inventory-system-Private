@@ -408,13 +408,13 @@ export default function ManagerFinancials() {
                         {row.name}
                       </TableCell>
                       <TableCell className="text-right text-green-600 font-medium">
-                        {row.income.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        ₦{row.income.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                       </TableCell>
                       <TableCell className="text-right text-error font-medium">
-                        {row.expenditure.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        ₦{row.expenditure.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                       </TableCell>
                       <TableCell className={`text-right font-bold ${row.net >= 0 ? 'text-green-700' : 'text-error'}`}>
-                        {row.net.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        ₦{row.net.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                       </TableCell>
                       <TableCell>
                         <IconArrowRight className="w-4 h-4 text-gray-400" />
@@ -561,16 +561,16 @@ export default function ManagerFinancials() {
                         <TableCell className="text-sm">{r.date}</TableCell>
                         <TableCell className="text-sm font-medium">{r.item}</TableCell>
                         <TableCell className="text-right text-sm">{r.quantity}</TableCell>
-                        <TableCell className="text-right text-sm text-gray-500">{r.unitPrice.toFixed(2)}</TableCell>
+                        <TableCell className="text-right text-sm text-gray-500">₦{r.unitPrice.toFixed(2)}</TableCell>
                         <TableCell className="text-right font-medium text-error">
-                          {r.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          ₦{r.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                         </TableCell>
                       </TableRow>
                     ))}
                     <TableRow className="bg-gray-50 font-bold">
                       <TableCell colSpan={4} className="text-right">Total Expenditure</TableCell>
                       <TableCell className="text-right text-error">
-                        {selectedCollectionDetails.expenditure.reduce((sum, r) => sum + r.total, 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        ₦{selectedCollectionDetails.expenditure.reduce((sum, r) => sum + r.total, 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                       </TableCell>
                     </TableRow>
                   </TableBody>

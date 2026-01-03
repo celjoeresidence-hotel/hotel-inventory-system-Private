@@ -14,6 +14,8 @@ import InventoryCatalog from './InventoryCatalog';
 import AuditLog from './AuditLog';
 import ManagerFinancials from './ManagerFinancials';
 import Reports from './Reports';
+import AdminRoomAnalytics from './AdminRoomAnalytics';
+import AdminDashboard from './AdminDashboard';
 import { 
   IconDashboard, 
   IconBox, 
@@ -25,7 +27,8 @@ import {
   IconMenu,
   IconHistory,
   IconClipboardList,
-  IconLayout
+  IconLayout,
+  IconBarChart
 } from './ui/Icons';
 import { Button } from './ui/Button';
 import UpdateNotification from './UpdateNotification';
@@ -39,7 +42,9 @@ export default function AppShell() {
   const menu = useMemo(() => {
     if (isAdmin) {
       return [
-        { key: 'rooms', label: 'Rooms', icon: <IconDashboard size={20} /> },
+        { key: 'admin_dashboard', label: 'Dashboard', icon: <IconDashboard size={20} /> },
+        { key: 'rooms', label: 'Rooms Management', icon: <IconCheckSquare size={20} /> },
+        { key: 'room_analytics', label: 'Room Analytics', icon: <IconBarChart size={20} /> },
         { key: 'front_desk_oversight', label: 'Front Desk Oversight', icon: <IconLayout size={20} /> },
         { key: 'staff', label: 'Staff Management', icon: <IconUsers size={20} /> },
         { key: 'financials', label: 'Financial Reports', icon: <IconFileText size={20} /> },
@@ -52,6 +57,7 @@ export default function AppShell() {
     if (isManager) {
       return [
         { key: 'manager', label: 'Manager Dashboard', icon: <IconDashboard size={20} /> },
+        { key: 'room_analytics', label: 'Room Analytics', icon: <IconBarChart size={20} /> },
         { key: 'front_desk_oversight', label: 'Front Desk Oversight', icon: <IconLayout size={20} /> },
         { key: 'financials', label: 'Financial Reports', icon: <IconFileText size={20} /> },
         { key: 'staff', label: 'Staff Management', icon: <IconUsers size={20} /> },
@@ -102,7 +108,9 @@ export default function AppShell() {
 
   function renderContent() {
     if (isAdmin) {
+      if (activeKey === 'admin_dashboard') return <AdminDashboard />;
       if (activeKey === 'rooms') return <AdminRooms />;
+      if (activeKey === 'room_analytics') return <AdminRoomAnalytics />;
       if (activeKey === 'front_desk_oversight') return <FrontDeskOversight role="admin" />;
       if (activeKey === 'financials') return <ManagerFinancials />;
       if (activeKey === 'inventory_catalog') return <InventoryCatalog />;
@@ -113,6 +121,8 @@ export default function AppShell() {
     }
     if (isManager) {
       if (activeKey === 'manager') return <ManagerDashboard />;
+      if (activeKey === 'admin_dashboard') return <AdminDashboard />;
+      if (activeKey === 'room_analytics') return <AdminRoomAnalytics />;
       if (activeKey === 'front_desk_oversight') return <FrontDeskOversight role="manager" />;
       if (activeKey === 'financials') return <ManagerFinancials />;
       if (activeKey === 'staff') return <AdminStaffManagement />;

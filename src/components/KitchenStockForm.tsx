@@ -193,34 +193,27 @@ export default function KitchenStockForm() {
         }
         enriched = enriched.sort((a: any, b: any) => a.item_name.localeCompare(b.item_name))
         
-        // Compute dynamic opening stock based on previous records
+        // Compute dynamic opening stock based on Ledger RPC
+        const { data: openingData, error: openingError } = await supabase
+          .rpc('get_inventory_opening_at_date', { 
+            _department: 'KITCHEN', 
+            _date: date 
+          })
+
+        if (openingError) {
+          console.error('Error fetching kitchen opening stock:', openingError)
+        }
+
+        const openingMap = new Map<string, number>()
+        if (openingData) {
+          for (const row of (openingData as any[])) {
+            openingMap.set(row.item_name, Number(row.opening_stock ?? 0))
+          }
+        }
+
         const computedItems: UIItem[] = [];
         for (const it of enriched) {
-          const baseline = it.opening_stock ?? 0;
-          
-          // Fetch all Kitchen daily records for this item before current date
-          const { data: history } = await supabase
-            .from('operational_records')
-            .select('data, created_at')
-            .eq('entity_type', 'kitchen')
-            .eq('status', 'approved')
-            .is('deleted_at', null)
-            .filter('data->>item_name', 'eq', it.item_name)
-            .lt('data->>date', date); // Strictly before current date
-            
-          let sumRestocked = 0;
-          let sumSold = 0;
-          
-          if (history) {
-            for (const row of history) {
-               const r = Number(row.data?.restocked ?? 0);
-               const s = Number(row.data?.sold ?? 0);
-               sumRestocked += r;
-               sumSold += s;
-            }
-          }
-          
-          const calculatedOpening = Math.max(0, baseline + sumRestocked - sumSold);
+          const calculatedOpening = openingMap.get(it.item_name) ?? 0;
           computedItems.push({ ...it, opening_stock: calculatedOpening });
         }
         

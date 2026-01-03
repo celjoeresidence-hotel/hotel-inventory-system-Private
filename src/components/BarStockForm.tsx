@@ -234,38 +234,29 @@ export default function BarStockForm() {
         
         enriched.sort((a, b) => a.item_name.localeCompare(b.item_name))
 
-        // 2. Compute Opening Stock
+        // 2. Compute Opening Stock via Ledger RPC
+        const { data: openingData, error: openingError } = await supabase
+          .rpc('get_inventory_opening_at_date', { 
+            _department: 'BAR', 
+            _date: date 
+          })
+
+        if (openingError) {
+          console.error('Error fetching bar opening stock:', openingError)
+        }
+
+        const openingMap = new Map<string, number>()
+        if (openingData) {
+          for (const row of (openingData as any[])) {
+            openingMap.set(row.item_name, Number(row.opening_stock ?? 0))
+          }
+        }
+
         const computedItems: UIItem[] = []
         for (const it of enriched) {
-          const baseline = it.opening_stock ?? 0
-          
-          // Fetch previous transactions
-          const { data: history } = await supabase
-            .from('operational_records')
-            .select('data, created_at, original_id, version_no')
-            .eq('entity_type', 'bar')
-            .eq('status', 'approved')
-            .is('deleted_at', null)
-            .filter('data->>item_name', 'eq', it.item_name)
-            .lt('data->>date', date) // Strictly before
-          
-          // Dedup history if needed, though typically bar records are daily inserts.
-          // Assuming history might have duplicates if edited? 'bar' records usually don't have versioning implemented as robustly as config, but let's be safe.
-          // Actually, bar records are transactional. We just sum them up.
-          
-          let sumRestocked = 0
-          let sumSold = 0
-          
-          if (history) {
-             for (const row of history) {
-               const r = Number(row.data?.restocked ?? 0)
-               const s = Number(row.data?.sold ?? 0)
-               sumRestocked += r
-               sumSold += s
-             }
-          }
-          
-          const calculatedOpening = Math.max(0, baseline + sumRestocked - sumSold)
+          // Use RPC derived opening stock
+          // If RPC returns nothing for this item, it means 0 (or strictly speaking, the RPC returns 0 if no events)
+          const calculatedOpening = openingMap.get(it.item_name) ?? 0
           computedItems.push({ ...it, opening_stock: calculatedOpening })
         }
 

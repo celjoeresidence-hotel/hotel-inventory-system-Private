@@ -65,24 +65,52 @@ export default function ManagerDashboard() {
   const [selectedRecord, setSelectedRecord] = useState<OperationalRecordRow | null>(null);
   const [showDetails, setShowDetails] = useState(false);
 
+  // Metrics State
+  const [metricsToday, setMetricsToday] = useState<any>(null);
+  const [metricsMonth, setMetricsMonth] = useState<any>(null);
+
   useEffect(() => {
-    async function fetchApproved() {
+    async function fetchDashboardData() {
       if (!canUse) return;
       setError(null);
       setLoading(true);
       try {
-        const { data, error } = await supabase!
-          .from('operational_records')
-          .select('*')
-          .eq('status', 'approved')
-          .order('created_at', { ascending: false })
-          .limit(100); // Limit to last 100 for performance
-          
-        if (error) {
-          throw error;
-        }
-        
-        const safe = (data ?? []).map((r: any) => ({
+        const todayStr = new Date().toISOString().split('T')[0];
+        const startOfMonthStr = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+
+        // Parallel requests
+        const [
+          { data: todayData, error: todayError },
+          { data: monthData, error: monthError },
+          { data: rowsData, error: rowsError }
+        ] = await Promise.all([
+          // 1. Metrics for Today
+          supabase!.rpc('get_dashboard_metrics', {
+            _start_date: todayStr,
+            _end_date: todayStr
+          }),
+          // 2. Metrics for Month
+          supabase!.rpc('get_dashboard_metrics', {
+            _start_date: startOfMonthStr,
+            _end_date: todayStr
+          }),
+          // 3. Recent Records
+          supabase!
+            .from('operational_records')
+            .select('*')
+            .eq('status', 'approved')
+            .order('created_at', { ascending: false })
+            .limit(100)
+        ]);
+
+        if (todayError) throw todayError;
+        if (monthError) throw monthError;
+        if (rowsError) throw rowsError;
+
+        setMetricsToday(todayData);
+        setMetricsMonth(monthData);
+
+        const safeRows = (rowsData ?? []).map((r: any) => ({
           id: String(r.id),
           entity_type: String(r.entity_type ?? ''),
           status: String(r.status ?? ''),
@@ -91,60 +119,29 @@ export default function ManagerDashboard() {
           created_at: r.created_at ?? null,
           reviewed_at: r.reviewed_at ?? null,
         })) as OperationalRecordRow[];
-        setRows(safe);
+        setRows(safeRows);
+
       } catch (err: any) {
         setError(err.message);
       } finally {
         setLoading(false);
       }
     }
-    fetchApproved();
+    fetchDashboardData();
   }, [canUse]);
 
-  // Helpers for date checks
-  const isToday = (iso: string | null | undefined) => {
-    if (!iso) return false;
-    const d = new Date(iso);
-    const now = new Date();
-    return d.getDate() === now.getDate() && 
-           d.getMonth() === now.getMonth() && 
-           d.getFullYear() === now.getFullYear();
-  };
+  // Use metrics from RPC
+  const roomsRevenueToday = metricsToday?.total_revenue ?? 0;
+  const roomsMonthlyRevenue = metricsMonth?.total_revenue ?? 0;
   
-  const isCurrentMonth = (iso: string | null | undefined) => {
-    if (!iso) return false;
-    const d = new Date(iso);
-    const now = new Date();
-    return d.getMonth() === now.getMonth() && 
-           d.getFullYear() === now.getFullYear();
-  };
+  const barCountToday = metricsToday?.bar_orders ?? 0;
+  const barCountMonth = metricsMonth?.bar_orders ?? 0;
 
-  const rowsApprovedToday = useMemo(() => rows.filter((r) => isToday(r.reviewed_at ?? r.created_at)), [rows]);
-  const rowsApprovedThisMonth = useMemo(() => rows.filter((r) => isCurrentMonth(r.reviewed_at ?? r.created_at)), [rows]);
+  const kitchenCountToday = metricsToday?.kitchen_orders ?? 0;
+  // const kitchenCountMonth = metricsMonth?.kitchen_orders ?? 0; 
 
-  // Daily summary
-  const roomsRevenueToday = useMemo(
-    () =>
-      rowsApprovedToday
-        .filter((r) => r.entity_type === 'front_desk' && (r.data?.type === 'room_booking' || r.data?.record_type === 'room_booking'))
-        .reduce((sum, r) => sum + (Number(r.financial_amount ?? 0) || 0), 0),
-    [rowsApprovedToday]
-  );
-  
-  const barCountToday = useMemo(() => rowsApprovedToday.filter((r) => r.entity_type === 'bar').length, [rowsApprovedToday]);
-  const kitchenCountToday = useMemo(() => rowsApprovedToday.filter((r) => r.entity_type === 'kitchen').length, [rowsApprovedToday]);
-  const storekeeperCountToday = useMemo(() => rowsApprovedToday.filter((r) => r.entity_type === 'storekeeper').length, [rowsApprovedToday]);
-
-  // Monthly aggregation
-  const roomsMonthlyRevenue = useMemo(
-    () =>
-      rowsApprovedThisMonth
-        .filter((r) => r.entity_type === 'front_desk' && (r.data?.type === 'room_booking' || r.data?.record_type === 'room_booking'))
-        .reduce((sum, r) => sum + (Number(r.financial_amount ?? 0) || 0), 0),
-    [rowsApprovedThisMonth]
-  );
-  
-  const barCountMonth = useMemo(() => rowsApprovedThisMonth.filter((r) => r.entity_type === 'bar').length, [rowsApprovedThisMonth]);
+  const storekeeperCountToday = metricsToday?.store_moves ?? 0;
+  // const storekeeperCountMonth = metricsMonth?.store_moves ?? 0;
 
   if (role !== 'manager') {
     return (

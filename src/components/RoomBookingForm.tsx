@@ -64,25 +64,40 @@ export default function RoomBookingForm() {
   }, [ratePerNight, nights]);
 
   useEffect(() => {
-    async function fetchRooms() {
+    async function fetchAvailableRooms() {
       setRoomsError(null);
       if (!isConfigured || !supabase) return;
+      
+      // Only fetch if we have valid dates
+      if (!startDate || !endDate) {
+        setRooms([]);
+        return;
+      }
+      
+      const s = new Date(startDate);
+      const e = new Date(endDate);
+      if (isNaN(s.getTime()) || isNaN(e.getTime()) || e <= s) {
+         setRooms([]);
+         return;
+      }
+
       setRoomsLoading(true);
       try {
         const { data, error } = await supabase
-          .from('rooms')
-          .select('id, room_number, room_type, price_per_night')
-          .eq('is_active', true)
-          .order('room_number', { ascending: true });
+          .rpc('get_available_rooms', { 
+            _check_in: startDate, 
+            _check_out: endDate 
+          });
+
         if (error) {
           setRoomsError(error.message);
           setRooms([]);
           return;
         }
+        
         const mapped: RoomOption[] = (data ?? []).map((r: any) => ({
           id: String(r.id),
           room_number: String(r.room_number ?? ''),
-          room_name: r.room_name ? String(r.room_name) : undefined,
           room_type: String(r.room_type ?? ''),
           price_per_night: Number(r.price_per_night ?? 0),
         }));
@@ -91,8 +106,8 @@ export default function RoomBookingForm() {
         setRoomsLoading(false);
       }
     }
-    fetchRooms();
-  }, [isConfigured]);
+    fetchAvailableRooms();
+  }, [isConfigured, startDate, endDate]);
 
   const selectedRoom = useMemo(() => rooms.find((r) => r.id === roomId) ?? null, [rooms, roomId]);
 
@@ -139,6 +154,39 @@ export default function RoomBookingForm() {
 
     setSubmitting(true);
     try {
+      // 1. Pre-check availability
+      const { data: isAvailable, error: availError } = await supabase!
+        .rpc('check_room_availability', {
+          _room_id: roomId,
+          _check_in: startDate,
+          _check_out: endDate
+        });
+
+      if (availError) {
+        setError(availError.message);
+        return;
+      }
+      
+      if (!isAvailable) {
+        setError('Selected room is no longer available for these dates.');
+        // Refresh availability
+        const { data: newRooms } = await supabase!
+          .rpc('get_available_rooms', { 
+            _check_in: startDate, 
+            _check_out: endDate 
+          });
+        if (newRooms) {
+           const mapped: RoomOption[] = newRooms.map((r: any) => ({
+             id: String(r.id),
+             room_number: String(r.room_number ?? ''),
+             room_type: String(r.room_type ?? ''),
+             price_per_night: Number(r.price_per_night ?? 0),
+           }));
+           setRooms(mapped);
+        }
+        return;
+      }
+
       const payload: any = {
         type: 'room_booking',
         room_id: roomId.trim(),

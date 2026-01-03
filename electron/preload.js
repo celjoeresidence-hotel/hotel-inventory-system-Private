@@ -14,6 +14,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('update-downloaded', subscription);
     return () => ipcRenderer.removeListener('update-downloaded', subscription);
   },
+  onDownloadProgress: (callback) => {
+    const subscription = (event, value) => callback(value);
+    ipcRenderer.on('download-progress', subscription);
+    return () => ipcRenderer.removeListener('download-progress', subscription);
+  },
 });
 
 window.addEventListener('DOMContentLoaded', () => {

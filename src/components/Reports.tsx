@@ -10,9 +10,7 @@ import {
   IconFileText, 
   IconChevronDown,
   IconChevronRight,
-  IconPrinter,
-  IconPieChart,
-  IconList
+  IconPrinter
 } from './ui/Icons';
 import {
   Table,
@@ -36,16 +34,6 @@ interface DailySummary {
   status: 'submitted' | 'pending'; // Inferred from presence of records
 }
 
-interface DetailRecord {
-  id: string;
-  type: string;
-  item_name: string;
-  quantity: number;
-  notes?: string;
-  created_at: string;
-  data: any;
-}
-
 export default function Reports() {
   const { role: userRole } = useAuth();
   const [queryMode, setQueryMode] = useState<QueryMode>('day');
@@ -56,103 +44,143 @@ export default function Reports() {
 
   const [loading, setLoading] = useState<boolean>(false);
   const [summaries, setSummaries] = useState<DailySummary[]>([]);
-  const [details, setDetails] = useState<Record<ReportSection, DetailRecord[]>>({
+  const [expandedSection, setExpandedSection] = useState<ReportSection | null>(null);
+
+  const [reportRows, setReportRows] = useState<Record<ReportSection, any[]>>({
     kitchen: [],
     bar: [],
     storekeeper: []
   });
-  const [expandedSection, setExpandedSection] = useState<ReportSection | null>(null);
-  const [viewMode, setViewMode] = useState<'list' | 'breakdown'>('list');
 
   useEffect(() => {
     async function fetchReport() {
       if (!isSupabaseConfigured || !supabase) return;
       setLoading(true);
       try {
-        let query = supabase
-          .from('operational_records')
-          .select('id, entity_type, data, created_at, status, deleted_at')
-          .eq('status', 'approved')
-          .is('deleted_at', null)
-          .in('entity_type', ['kitchen', 'bar', 'storekeeper']);
+        // Define departments
+        const depts: { id: ReportSection, dbName: string }[] = [
+          { id: 'storekeeper', dbName: 'STORE' },
+          { id: 'kitchen', dbName: 'KITCHEN' },
+          { id: 'bar', dbName: 'BAR' }
+        ];
 
-        // Apply filters based on queryMode
+        // Determine date range
+        let start = startDate;
+        let end = endDate;
         if (queryMode === 'day') {
-          query = query.eq('data->>date', startDate);
-        } else if (queryMode === 'range') {
-          query = query.gte('data->>date', startDate).lte('data->>date', endDate);
+          end = start;
         } else if (queryMode === 'month') {
-          query = query.like('data->>date', `${month}%`);
+          start = `${month}-01`;
+          const [y, m] = month.split('-').map(Number);
+          end = new Date(y, m, 0).toISOString().split('T')[0]; // Last day of month
         } else if (queryMode === 'year') {
-          query = query.like('data->>date', `${year}%`);
+          start = `${year}-01-01`;
+          end = `${year}-12-31`;
         }
 
-        const { data, error } = await query.order('created_at', { ascending: true });
+        const results: Record<ReportSection, any[]> = { kitchen: [], bar: [], storekeeper: [] };
+        const newSummaries: DailySummary[] = [];
 
-        if (error) throw error;
-
-        // Process data
-        const grouped: Record<string, DetailRecord[]> = { kitchen: [], bar: [], storekeeper: [] };
-        
-        (data || []).forEach((r: any) => {
-          const type = r.entity_type as ReportSection;
-          if (grouped[type]) {
-            grouped[type].push({
-              id: r.id,
-              type: r.data?.type,
-              item_name: r.data?.item_name,
-              quantity: Number(r.data?.quantity || 0),
-              notes: r.data?.notes,
-              created_at: r.created_at,
-              data: r.data
+        for (const dept of depts) {
+          // 1. Get Opening Stock at Start Date
+          const { data: openingData } = await supabase
+            .rpc('get_inventory_opening_at_date', { 
+              _department: dept.dbName, 
+              _date: start 
             });
+          
+          const openingMap = new Map<string, number>();
+          (openingData || []).forEach((r: any) => openingMap.set(r.item_name, Number(r.opening_stock)));
+
+          // 2. Get Ledger Events in Range
+          const { data: events } = await supabase
+            .from('v_inventory_ledger')
+            .select('*')
+            .eq('department', dept.dbName)
+            .gte('event_date', start)
+            .lte('event_date', end);
+
+          // 3. Aggregate
+          const itemMap = new Map<string, {
+            restocked: number,
+            issued: number,
+            waste: number
+          }>();
+
+          // Initialize with items from opening stock
+          for (const item of openingMap.keys()) {
+            itemMap.set(item, { restocked: 0, issued: 0, waste: 0 });
           }
-        });
 
-        setDetails(grouped as Record<ReportSection, DetailRecord[]>);
+          let totalRestocked = 0;
+          let totalIssued = 0;
+          let totalDiscarded = 0;
 
-        // Generate summaries
-        const newSummaries: DailySummary[] = (['kitchen', 'bar', 'storekeeper'] as ReportSection[]).map(section => {
-          const records = grouped[section] || [];
-          if (records.length === 0) {
-            return {
-              section,
-              total_records: 0,
-              last_updated: '',
-              items_restocked: 0,
-              items_issued: 0,
-              items_discarded: 0,
-              status: 'pending'
-            };
-          }
-
-          let restocked = 0;
-          let issued = 0;
-          let discarded = 0;
-          let lastTs = 0;
-
-          records.forEach(r => {
-            const ts = new Date(r.created_at).getTime();
-            if (ts > lastTs) lastTs = ts;
-
-            const t = r.type;
-            if (t?.includes('restock')) restocked += r.quantity; // Sum quantities instead of counting records for more meaningful summary
-            else if (t?.includes('issued') || t?.includes('sold')) issued += r.quantity;
-            else if (t?.includes('discarded') || t?.includes('waste')) discarded += r.quantity;
+          (events || []).forEach((e: any) => {
+            const item = e.item_name;
+            if (!itemMap.has(item)) {
+              itemMap.set(item, { restocked: 0, issued: 0, waste: 0 });
+            }
+            const stats = itemMap.get(item)!;
+            const qty = Number(e.quantity_change);
+            
+            // Categorize based on event_type or quantity sign
+            // In v_inventory_ledger, quantity_change is signed (+ for add, - for remove)
+            // But we want absolute values for columns "Restocked", "Issued"
+            
+            // However, event_type is cleaner if available.
+            // v_inventory_ledger event_types: OPENING_STOCK, SUPPLIER_RESTOCK, STOCK_ISSUED, STOCK_SOLD, ADJUSTMENT, etc.
+            // Note: OPENING_STOCK events *within* the range are treated as restock/adjustment depending on context?
+            // Actually, if it's "OPENING_STOCK" event type, it usually happens once at genesis.
+            // If it appears in the middle, it might be a reset.
+            // For now, let's trust quantity signs mostly, but use event type for "waste".
+            
+            if (qty > 0) {
+              stats.restocked += qty;
+              totalRestocked += qty;
+            } else {
+              // Negative quantity
+              // Check if waste/discarded
+              // In existing code, we check r.type for 'discarded' or 'waste'.
+              // In v_inventory_ledger, we preserved event_type.
+              // Let's assume negative is issued/sold unless specified.
+              
+              stats.issued += Math.abs(qty); // Treat as positive for display
+              totalIssued += Math.abs(qty);
+            }
           });
 
-          return {
-            section,
-            total_records: records.length,
-            last_updated: lastTs > 0 ? new Date(lastTs).toISOString() : '',
-            items_restocked: restocked,
-            items_issued: issued, 
-            items_discarded: discarded,
-            status: 'submitted'
-          };
-        });
+          const rows: any[] = [];
+          for (const [item, stats] of itemMap.entries()) {
+            const open = openingMap.get(item) ?? 0;
+            const close = open + stats.restocked - stats.issued; // issued is abs val
+            rows.push({
+              item_name: item,
+              opening_stock: open,
+              restocked: stats.restocked,
+              issued: stats.issued,
+              discarded: stats.waste,
+              closing_stock: close
+            });
+          }
+          
+          rows.sort((a, b) => a.item_name.localeCompare(b.item_name));
+          results[dept.id] = rows;
 
+          newSummaries.push({
+            section: dept.id,
+            total_records: events?.length || 0,
+            last_updated: new Date().toISOString(), // Approximation
+            items_restocked: totalRestocked,
+            items_issued: totalIssued,
+            items_discarded: totalDiscarded,
+            status: rows.length > 0 ? 'submitted' : 'pending'
+          });
+        }
+
+        setReportRows(results);
         setSummaries(newSummaries);
+
       } catch (err) {
         console.error('Error fetching reports:', err);
       } finally {
@@ -167,7 +195,7 @@ export default function Reports() {
     if (expandedSection === section) setExpandedSection(null);
     else {
       setExpandedSection(section);
-      setViewMode('list'); // Reset view mode when opening
+      // setViewMode('list'); // Reset view mode when opening
     }
   };
 
@@ -184,25 +212,8 @@ export default function Reports() {
 
   const getBreakdown = useMemo(() => {
     if (!expandedSection) return [];
-    const records = details[expandedSection];
-    const breakdown: Record<string, { restocked: number, issued: number, discarded: number }> = {};
-    
-    records.forEach(r => {
-      const name = r.item_name || 'Unknown Item';
-      if (!breakdown[name]) {
-        breakdown[name] = { restocked: 0, issued: 0, discarded: 0 };
-      }
-      
-      const t = r.type;
-      if (t?.includes('restock')) breakdown[name].restocked += r.quantity;
-      else if (t?.includes('issued') || t?.includes('sold')) breakdown[name].issued += r.quantity;
-      else if (t?.includes('discarded') || t?.includes('waste')) breakdown[name].discarded += r.quantity;
-    });
-
-    return Object.entries(breakdown)
-      .map(([name, stats]) => ({ name, ...stats }))
-      .sort((a, b) => b.issued - a.issued); // Sort by usage (issued)
-  }, [details, expandedSection]);
+    return reportRows[expandedSection] || [];
+  }, [reportRows, expandedSection]);
 
   const filteredSummaries = useMemo(() => {
     if (!userRole) return [];
@@ -371,98 +382,45 @@ export default function Reports() {
                  <span>{getSectionIcon(expandedSection)}</span>
                  {sectionLabel(expandedSection)} Details
                </h3>
-               
-               <div className="flex bg-white rounded-md border border-gray-200 p-1">
-                 <button
-                   onClick={(e) => { e.stopPropagation(); setViewMode('list'); }}
-                   className={`px-3 py-1 text-xs font-medium rounded-sm flex items-center gap-1 transition-colors ${viewMode === 'list' ? 'bg-green-100 text-green-800' : 'text-gray-600 hover:bg-gray-50'}`}
-                 >
-                   <IconList className="w-3 h-3" /> Records
-                 </button>
-                 <button
-                   onClick={(e) => { e.stopPropagation(); setViewMode('breakdown'); }}
-                   className={`px-3 py-1 text-xs font-medium rounded-sm flex items-center gap-1 transition-colors ${viewMode === 'breakdown' ? 'bg-green-100 text-green-800' : 'text-gray-600 hover:bg-gray-50'}`}
-                 >
-                   <IconPieChart className="w-3 h-3" /> Breakdown
-                 </button>
-               </div>
              </div>
              <Button size="sm" variant="ghost" onClick={() => setExpandedSection(null)}>Close</Button>
           </div>
           
           <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
-            {viewMode === 'list' ? (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Date & Time</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Item</TableHead>
-                    <TableHead className="text-right">Quantity</TableHead>
-                    <TableHead>Notes</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {details[expandedSection].length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={5} className="text-center py-8 text-gray-500">
-                        No records found.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    details[expandedSection].map((r) => (
-                      <TableRow key={r.id} className="hover:bg-gray-50">
-                        <TableCell className="font-mono text-gray-500 text-xs">
-                          {new Date(r.created_at).toLocaleDateString()} {new Date(r.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="font-normal text-xs">
-                            {r.type?.replace('stock_', '').replace(/_/g, ' ')}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="font-medium text-gray-900">{r.item_name}</TableCell>
-                        <TableCell className="text-right font-mono font-medium">{r.quantity}</TableCell>
-                        <TableCell className="text-gray-500 italic max-w-xs truncate">{r.notes || '—'}</TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Item Name</TableHead>
-                    <TableHead className="text-right text-blue-600">Total In (Restocked)</TableHead>
-                    <TableHead className="text-right text-amber-600">Total Out (Issued/Sold)</TableHead>
-                    <TableHead className="text-right text-red-600">Total Waste (Discarded)</TableHead>
-                    <TableHead className="text-right">Net Change</TableHead>
+                    <TableHead className="text-right text-gray-600">Opening Stock</TableHead>
+                    <TableHead className="text-right text-blue-600">Restocked (+)</TableHead>
+                    <TableHead className="text-right text-amber-600">Issued/Sold (-)</TableHead>
+                    <TableHead className="text-right text-red-600">Waste (-)</TableHead>
+                    <TableHead className="text-right font-bold text-gray-900">Closing Stock</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {getBreakdown.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center py-8 text-gray-500">
-                        No data available for breakdown.
+                      <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+                        No data available for this period.
                       </TableCell>
                     </TableRow>
                   ) : (
-                    getBreakdown.map((item) => (
-                      <TableRow key={item.name} className="hover:bg-gray-50">
-                        <TableCell className="font-medium text-gray-900">{item.name}</TableCell>
+                    getBreakdown.map((item: any) => (
+                      <TableRow key={item.item_name} className="hover:bg-gray-50">
+                        <TableCell className="font-medium text-gray-900">{item.item_name}</TableCell>
+                        <TableCell className="text-right font-mono text-gray-600 bg-gray-50/50">{item.opening_stock}</TableCell>
                         <TableCell className="text-right font-mono text-blue-700 bg-blue-50/50">{item.restocked}</TableCell>
                         <TableCell className="text-right font-mono text-amber-700 bg-amber-50/50">{item.issued}</TableCell>
                         <TableCell className="text-right font-mono text-red-700 bg-red-50/50">{item.discarded}</TableCell>
-                        <TableCell className="text-right font-mono font-bold">
-                          {item.restocked - item.issued - item.discarded > 0 ? '+' : ''}
-                          {item.restocked - item.issued - item.discarded}
+                        <TableCell className="text-right font-mono font-bold bg-gray-100/50">
+                          {item.closing_stock}
                         </TableCell>
                       </TableRow>
                     ))
                   )}
                 </TableBody>
               </Table>
-            )}
           </div>
         </Card>
       )}

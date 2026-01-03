@@ -123,10 +123,8 @@ export default function CheckOutModal({ isOpen, onClose, booking, onSuccess }: C
           meta: { created_at_local: new Date().toISOString() }
         };
         await supabase!.from('operational_records').insert({
-           section: 'front_desk',
-           subsection: 'financials',
-           data: paymentPayload,
-           staff_id: staffId
+           entity_type: 'front_desk',
+           data: paymentPayload
         });
       }
 

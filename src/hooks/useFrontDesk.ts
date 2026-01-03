@@ -46,6 +46,7 @@ export function useFrontDesk() {
       const active: BookingWithId[] = [];
       const past: BookingWithId[] = [];
       const checkouts: BookingWithId[] = [];
+      const reservations: any[] = []; // Store reservations
       const checkedOutBookingIds = new Set<string>();
 
       // Identify checkouts first
@@ -73,9 +74,11 @@ export function useFrontDesk() {
       const roomMap = new Map<string, string>();
       roomsData?.forEach((r) => roomMap.set(String(r.id), r.room_number));
 
-      // Sort bookings
+      // Sort bookings & reservations
       recordsData?.forEach((rec) => {
-        const d = rec.data as FrontDeskRecordData;
+        const d = rec.data as any; // Use any to support room_reservation
+        
+        // Handle Active Bookings (Stays)
         if (d.type === 'room_booking' && d.stay && d.guest) {
           const booking: BookingWithId = {
             id: rec.id,
@@ -91,16 +94,33 @@ export function useFrontDesk() {
             active.push(booking);
           }
         }
+        
+        // Handle Reservations
+        if (d.type === 'room_reservation') {
+           reservations.push({ ...rec, data: d });
+        }
       });
 
       setActiveBookings(active);
       setPastBookings(past);
 
       // 4. Build Room Status
+      const today = new Date().toISOString().split('T')[0];
+      
       const roomStatusList: RoomStatus[] = (roomsData || []).map((r) => {
-        // Find if occupied
+        // Find if occupied (Active Booking)
         const booking = active.find(b => String(b.data.stay?.room_id) === String(r.id));
         
+        // Find if reserved (Approved Reservation overlapping today)
+        const reservation = reservations.find(res => {
+            if (res.status !== 'approved') return false;
+            if (String(res.data.room_id) !== String(r.id)) return false;
+            
+            // Check overlap with today
+            // If check_in <= today < check_out
+            return res.data.check_in_date <= today && res.data.check_out_date > today;
+        });
+
         let status: RoomStatus['status'] = 'available';
         let current_guest = undefined;
         let check_out_date = undefined;
@@ -109,11 +129,10 @@ export function useFrontDesk() {
           status = 'occupied';
           current_guest = booking.data.guest?.full_name;
           check_out_date = booking.data.stay?.check_out;
-          
-          const today = new Date().toISOString().split('T')[0];
-          if (booking.data.stay?.check_in && booking.data.stay.check_in > today) {
-            status = 'reserved';
-          }
+        } else if (reservation) {
+          status = 'reserved';
+          current_guest = reservation.data.guest.name;
+          check_out_date = reservation.data.check_out_date;
         }
 
         return {

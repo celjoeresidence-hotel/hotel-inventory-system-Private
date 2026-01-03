@@ -104,15 +104,22 @@ export default function RoomStatusGrid({ rooms, loading }: RoomStatusGridProps) 
 
             <div className="space-y-1">
               <div className="text-sm font-medium text-gray-900 truncate">
-                {room.status === 'occupied' ? room.current_guest : room.room_type}
+                {(room.status === 'occupied' || room.status === 'reserved') ? room.current_guest : room.room_type}
               </div>
               <div className="text-xs text-gray-500">
                 {room.status === 'occupied' && room.check_out_date ? 
                   `Out: ${room.check_out_date}` : 
+                 room.status === 'reserved' && room.check_out_date ?
+                  `Until: ${room.check_out_date}` :
                   `₦${room.price_per_night.toLocaleString()}`
                 }
               </div>
             </div>
+            
+            {/* Tooltip for Reserved/Occupied */}
+            {(room.status === 'reserved' || room.status === 'occupied') && (
+                <div className="absolute inset-0 bg-transparent" title={`${room.status === 'reserved' ? 'Reserved' : 'Occupied'} by ${room.current_guest}\nUntil: ${room.check_out_date}`}></div>
+            )}
           </div>
         ))}
       </div>
