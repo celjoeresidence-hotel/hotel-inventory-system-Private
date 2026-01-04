@@ -71,6 +71,7 @@ function AdminStaffManagementInner() {
   const [isActive, setIsActive] = useState(true);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   
   // Search state
   const [searchTerm, setSearchTerm] = useState('');
@@ -155,6 +156,7 @@ function AdminStaffManagementInner() {
     setUserId('');
     setIsActive(true);
     setFormError(null);
+    setFieldErrors({});
     setIsModalOpen(true);
   }
 
@@ -168,17 +170,32 @@ function AdminStaffManagementInner() {
     setUserId(item.user_id);
     setIsActive(item.is_active);
     setFormError(null);
+    setFieldErrors({});
     setIsModalOpen(true);
   }
 
   async function handleSave() {
     setSaving(true);
     setFormError(null);
+    setFieldErrors({});
+
     if (!isSupabaseConfigured || !supabase) {
       setFormError('Supabase is not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.');
       setSaving(false);
       return;
     }
+
+    // Validation
+    const errors: Record<string, string> = {};
+    if (!fullName.trim()) errors.fullName = 'Full name is required';
+    if (!editing && !userId.trim()) errors.userId = 'User ID (Supabase auth uid) is required';
+    
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      setSaving(false);
+      return;
+    }
+
     try {
       if (editing) {
         if (isSupervisor) {
@@ -197,8 +214,7 @@ function AdminStaffManagementInner() {
       } else {
         // Create: Admin and Manager
         if (!isAdmin && !isManager) throw new Error('Only Admin or Manager can add staff.');
-        if (!fullName.trim()) throw new Error('Full name is required');
-        if (!userId.trim()) throw new Error('User ID (Supabase auth uid) is required');
+        
         const { error } = await supabase!
            .from('staff_profiles')
            .insert([{ full_name: fullName.trim(), role, department: department || null, user_id: userId.trim(), is_active: isActive }]);
@@ -213,7 +229,23 @@ function AdminStaffManagementInner() {
       setStaff((data as StaffProfile[]) || []);
       setIsModalOpen(false);
     } catch (e: any) {
-      setFormError(e?.message || 'Failed to save');
+      console.error('Save error:', e);
+      let msg = e?.message || 'Failed to save';
+      
+      // Error Mapping
+      if (msg.includes('violates foreign key constraint')) {
+        setFieldErrors({ userId: 'User ID not found in Auth system. Please create the user in Supabase Auth first.' });
+        msg = 'Validation failed. Please check the highlighted fields.';
+      } else if (msg.includes('violates unique constraint') || msg.includes('duplicate key')) {
+         if (msg.includes('user_id')) {
+            setFieldErrors({ userId: 'This User ID is already assigned to another profile.' });
+         }
+         msg = 'Duplicate entry detected.';
+      } else if (msg.includes('violates row-level security')) {
+        msg = 'Permission denied: You do not have rights to perform this action.';
+      }
+
+      setFormError(msg);
     } finally {
       setSaving(false);
     }
@@ -404,10 +436,14 @@ function AdminStaffManagementInner() {
           <Input
             label="Full Name"
             value={fullName}
-            onChange={(e) => setFullName(e.target.value)}
+            onChange={(e) => {
+              setFullName(e.target.value);
+              if (fieldErrors.fullName) setFieldErrors({ ...fieldErrors, fullName: '' });
+            }}
             disabled={!!editing}
             placeholder="John Doe"
             helperText={editing ? "Name cannot be changed after creation." : undefined}
+            error={fieldErrors.fullName}
             fullWidth
           />
           
@@ -432,10 +468,14 @@ function AdminStaffManagementInner() {
           <Input
             label="User ID (Supabase Auth UID)"
             value={userId}
-            onChange={(e) => setUserId(e.target.value)}
+            onChange={(e) => {
+              setUserId(e.target.value);
+              if (fieldErrors.userId) setFieldErrors({ ...fieldErrors, userId: '' });
+            }}
             disabled={!!editing}
             placeholder="uuid-string-here"
             helperText={editing ? "User ID cannot be changed." : "This links the staff profile to a login account."}
+            error={fieldErrors.userId}
             fullWidth
           />
 

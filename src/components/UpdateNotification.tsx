@@ -6,6 +6,7 @@ export default function UpdateNotification() {
   const [updateDownloaded, setUpdateDownloaded] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   const [restartCountdown, setRestartCountdown] = useState<number | null>(null);
 
   useEffect(() => {
@@ -16,6 +17,7 @@ export default function UpdateNotification() {
     // Listen for update available
     const unsubscribeAvailable = electronAPI.onUpdateAvailable(() => {
       setUpdateAvailable(true);
+      setUpdateError(null);
     });
 
     // Listen for download progress
@@ -28,10 +30,20 @@ export default function UpdateNotification() {
       });
     }
 
+    // Listen for update error
+    let unsubscribeError: (() => void) | undefined;
+    if (electronAPI.onUpdateError) {
+      unsubscribeError = electronAPI.onUpdateError((err: string) => {
+        setDownloading(false);
+        setUpdateError(err || 'Update failed');
+      });
+    }
+
     // Listen for update downloaded
     const unsubscribeDownloaded = electronAPI.onUpdateDownloaded(() => {
       setUpdateDownloaded(true);
       setDownloading(false);
+      setUpdateError(null);
       // Start auto restart countdown (5 seconds)
       setRestartCountdown(5);
     });
@@ -42,6 +54,7 @@ export default function UpdateNotification() {
     return () => {
       if (unsubscribeAvailable) unsubscribeAvailable();
       if (unsubscribeProgress) unsubscribeProgress();
+      if (unsubscribeError) unsubscribeError();
       if (unsubscribeDownloaded) unsubscribeDownloaded();
     };
   }, []);
@@ -80,13 +93,29 @@ export default function UpdateNotification() {
     }
   };
 
-  if (!updateAvailable && !updateDownloaded) return null;
+  if (!updateAvailable && !updateDownloaded && !updateError) return null;
 
   return (
     <div className="fixed bottom-4 right-4 bg-white dark:bg-gray-800 p-4 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 z-50 max-w-sm w-full">
-      <h3 className="font-semibold text-lg mb-2 text-gray-900 dark:text-gray-100">Update Available</h3>
+      <h3 className="font-semibold text-lg mb-2 text-gray-900 dark:text-gray-100">
+        {updateError ? 'Update Failed' : 'Update Available'}
+      </h3>
       
-      {updateDownloaded ? (
+      {updateError ? (
+        <div>
+          <p className="text-sm text-red-600 dark:text-red-400 mb-4">
+            {updateError}
+          </p>
+          <div className="flex gap-2">
+            <Button onClick={() => setUpdateError(null)} variant="outline" className="w-1/2">
+              Dismiss
+            </Button>
+            <Button onClick={handleDownload} className="w-1/2">
+              Retry
+            </Button>
+          </div>
+        </div>
+      ) : updateDownloaded ? (
         <div>
           <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
             Update downloaded. Restarting in {restartCountdown} seconds...
