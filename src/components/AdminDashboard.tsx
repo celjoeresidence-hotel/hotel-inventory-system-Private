@@ -499,11 +499,11 @@ export default function AdminDashboard() {
       </Section>
       )}
 
-      {/* Pending Approvals Modal */}
+      {/* Daily Activities Modal */}
       <Modal
         isOpen={showPendingModal}
         onClose={() => setShowPendingModal(false)}
-        title="Pending Approvals"
+        title="Daily Activities"
         size="lg"
       >
         {loadingPending ? (

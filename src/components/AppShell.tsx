@@ -69,7 +69,7 @@ export default function AppShell() {
     }
     if (isSupervisor) {
       return [
-        { key: 'pending_approvals', label: 'Pending Approvals', icon: <IconCheckSquare size={20} /> },
+        { key: 'pending_approvals', label: 'Daily Activities', icon: <IconCheckSquare size={20} /> },
         { key: 'front_desk_monitor', label: 'Front Desk Monitor', icon: <IconLayout size={20} /> },
         { key: 'staff', label: 'Staff Management', icon: <IconUsers size={20} /> },
         { key: 'reports', label: 'Daily Reports', icon: <IconClipboardList size={20} /> },
@@ -112,12 +112,13 @@ export default function AppShell() {
       if (activeKey === 'rooms') return <AdminRooms />;
       if (activeKey === 'room_analytics') return <AdminRoomAnalytics />;
       if (activeKey === 'front_desk_oversight') return <FrontDeskOversight role="admin" />;
+      if (activeKey === 'staff') return <AdminStaffManagement />;
       if (activeKey === 'financials') return <ManagerFinancials />;
+      if (activeKey === 'reports') return <Reports />;
       if (activeKey === 'inventory_catalog') return <InventoryCatalog />;
       if (activeKey === 'inventory_setup') return <InventorySetup />;
       if (activeKey === 'audit_log') return <AuditLog />;
-      if (activeKey === 'reports') return <Reports />;
-      return <AdminRooms />;
+      return <AdminDashboard />;
     }
     if (isManager) {
       if (activeKey === 'manager') return <ManagerDashboard />;

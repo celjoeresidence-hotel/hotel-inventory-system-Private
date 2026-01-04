@@ -113,43 +113,15 @@ export default function StorekeeperStockForm() {
       setLoadingHistory(true)
       setError(null)
       try {
-        if (!isConfigured || !session || !supabase || !activeCategory) { setHistoryRecords([]); return }
-        
-        // 1. Get items in this category
-        let itemQ = supabase
-          .from('operational_records')
-          .select('data')
-          .eq('status', 'approved')
-          .is('deleted_at', null)
-          .filter('data->>type', 'eq', 'config_item')
-          .filter('data->>category', 'eq', activeCategory)
-          
-        if (selectedCollection) {
-          itemQ = itemQ.filter('data->>collection_name', 'eq', selectedCollection)
-        }
-        
-        const { data: itemData, error: itemError } = await itemQ
-        if (itemError) throw itemError
-        
-        const itemNames = (itemData ?? []).map((r: any) => r.data?.item_name).filter(Boolean)
-        
-        if (itemNames.length === 0) {
-          setHistoryRecords([])
-          return
-        }
-
+        if (!supabase) return
         const { data, error } = await supabase
-          .from('operational_records')
-          .select('id, data, created_at, status')
-          .eq('status', 'approved')
-          .is('deleted_at', null)
-          .eq('entity_type', 'storekeeper')
-          .in('data->>item_name', itemNames)
-          .order('created_at', { ascending: false })
-          .limit(200)
-          
-        if (error) throw error
+          .from('v_stock_history')
+          .select('*')
+          .eq('role', 'storekeeper')
+          .order('date', { ascending: false })
+          .limit(100)
         
+        if (error) throw error
         setHistoryRecords(data ?? [])
       } catch (err: any) {
         setError(err.message)
@@ -158,16 +130,16 @@ export default function StorekeeperStockForm() {
       }
     }
     fetchHistory()
-  }, [activeTab, activeCategory, selectedCollection, isConfigured, session])
+  }, [activeTab])
 
   // Filtered History
   const filteredHistory = useMemo(() => {
     if (!searchTerm) return historyRecords
     const lower = searchTerm.toLowerCase()
     return historyRecords.filter(r => 
-      (r.data?.item_name || '').toLowerCase().includes(lower) || 
-      (r.data?.staff_name || '').toLowerCase().includes(lower) ||
-      (r.data?.notes || '').toLowerCase().includes(lower)
+      (r.item_name || '').toLowerCase().includes(lower) || 
+      (r.staff_name || '').toLowerCase().includes(lower) ||
+      (r.notes || '').toLowerCase().includes(lower)
     )
   }, [historyRecords, searchTerm])
 
@@ -288,64 +260,93 @@ export default function StorekeeperStockForm() {
       try {
         if (!isConfigured || !session || !supabase || !activeCategory) { setItems([]); return }
         
-        // 1. Fetch config items
-        let q = supabase
-          .from('operational_records')
-          .select('id, data, original_id, version_no, created_at, status, deleted_at')
-          .eq('status', 'approved')
-          .is('deleted_at', null)
-          .filter('data->>type', 'eq', 'config_item')
-          .filter('data->>category', 'eq', activeCategory)
-          .order('created_at', { ascending: false })
-        if (selectedCollection) {
-          q = q.filter('data->>collection_name', 'eq', selectedCollection)
-        }
-        const { data, error } = await q
-        if (error) { setError(error.message); return }
-        
-        const latestByOriginal = new Map<string, any>()
-        for (const r of (data ?? [])) {
-          const key = String((r as any)?.original_id ?? (r as any)?.id)
-          const prev = latestByOriginal.get(key)
-          const currVer = Number((r as any)?.version_no ?? 0)
-          const prevVer = Number((prev as any)?.version_no ?? -1)
-          const currTs = new Date((r as any)?.created_at ?? 0).getTime()
-          const prevTs = new Date((prev as any)?.created_at ?? 0).getTime()
-          if (!prev || currVer > prevVer || (currVer === prevVer && currTs > prevTs)) {
-            latestByOriginal.set(key, r)
-          }
-        }
-        
-        const base = Array.from(latestByOriginal.values())
-          .map((r: any) => ({ item_name: String(r?.data?.item_name ?? ''), unit: r?.data?.unit ?? null }))
-          .filter((it: any) => it.item_name)
+        let computed: UIItem[] = []
+        let useFallback = false
 
-        // 2. Fetch opening stocks from Ledger RPC
-        // The RPC returns all items for the department. We can filter in memory or rely on the map.
-        const { data: openingData, error: openingError } = await supabase
-          .rpc('get_inventory_opening_at_date', { 
-            _department: 'STORE', 
-            _date: date 
+        // Try Optimized RPC first
+        try {
+          const { data, error } = await supabase.rpc('get_daily_stock_sheet', { 
+            _role: 'storekeeper', 
+            _category: activeCategory,
+            _report_date: date 
           })
-        
-        if (openingError) {
-          console.error('Error fetching opening stock:', openingError)
-          // Fallback to 0 if RPC fails, but log it.
-        }
 
-        const openingMap = new Map<string, number>()
-        if (openingData) {
-          for (const row of (openingData as any[])) {
-            openingMap.set(row.item_name, Number(row.opening_stock ?? 0))
+          if (!error && data) {
+            let rows = data as any[]
+            // Filter by collection if selected
+            if (selectedCollection) {
+              rows = rows.filter(r => r.collection_name === selectedCollection)
+            }
+            
+            computed = rows.map((r: any) => ({
+              item_name: String(r?.item_name ?? ''),
+              unit: r?.unit ?? null,
+              opening_stock: typeof r?.opening_stock === 'number' ? r.opening_stock : Number(r?.opening_stock ?? null),
+            })).filter((it: any) => it.item_name)
+          } else {
+            console.warn('get_daily_stock_sheet failed or missing, falling back to legacy fetch', error)
+            useFallback = true
           }
+        } catch (err) {
+          console.warn('get_daily_stock_sheet exception', err)
+          useFallback = true
         }
 
-        const computed: UIItem[] = []
-        for (const it of base) {
-          // If the item is in the openingMap, use that value. Otherwise 0.
-          // Note: The RPC handles "closing stock of yesterday = opening of today".
-          const opening = openingMap.get(it.item_name) ?? 0
-          computed.push({ item_name: it.item_name, unit: it.unit ?? null, opening_stock: opening })
+        if (useFallback) {
+          // 1. Fetch config items
+          let q = supabase
+            .from('operational_records')
+            .select('id, data, original_id, version_no, created_at, status, deleted_at')
+            .eq('status', 'approved')
+            .is('deleted_at', null)
+            .filter('data->>type', 'eq', 'config_item')
+            .filter('data->>category', 'eq', activeCategory)
+            .order('created_at', { ascending: false })
+          if (selectedCollection) {
+            q = q.filter('data->>collection_name', 'eq', selectedCollection)
+          }
+          const { data, error } = await q
+          if (error) { setError(error.message); return }
+          
+          const latestByOriginal = new Map<string, any>()
+          for (const r of (data ?? [])) {
+            const key = String((r as any)?.original_id ?? (r as any)?.id)
+            const prev = latestByOriginal.get(key)
+            const currVer = Number((r as any)?.version_no ?? 0)
+            const prevVer = Number((prev as any)?.version_no ?? -1)
+            const currTs = new Date((r as any)?.created_at ?? 0).getTime()
+            const prevTs = new Date((prev as any)?.created_at ?? 0).getTime()
+            if (!prev || currVer > prevVer || (currVer === prevVer && currTs > prevTs)) {
+              latestByOriginal.set(key, r)
+            }
+          }
+          
+          const base = Array.from(latestByOriginal.values())
+            .map((r: any) => ({ item_name: String(r?.data?.item_name ?? ''), unit: r?.data?.unit ?? null }))
+            .filter((it: any) => it.item_name)
+
+          // 2. Fetch opening stocks from Ledger RPC
+          const { data: openingData, error: openingError } = await supabase
+            .rpc('get_expected_opening_stock_batch', { 
+              _role: 'storekeeper', 
+              _report_date: date 
+            })
+          
+          if (openingError) {
+            console.error('Error fetching opening stock:', openingError)
+          }
+
+          const openingMap = new Map<string, number>()
+          if (openingData) {
+            for (const row of (openingData as any[])) {
+              openingMap.set(row.item_name, Number(row.opening_stock ?? 0))
+            }
+          }
+
+          for (const it of base) {
+            const opening = openingMap.get(it.item_name) ?? 0
+            computed.push({ item_name: it.item_name, unit: it.unit ?? null, opening_stock: opening })
+          }
         }
         
         // Sort by item name
@@ -797,49 +798,39 @@ export default function StorekeeperStockForm() {
                     <TableHeader className="bg-gray-50">
                       <TableRow>
                         <TableHead>Date</TableHead>
-                        <TableHead>Item</TableHead>
-                        <TableHead>Action</TableHead>
-                        <TableHead className="text-right">Quantity</TableHead>
+                        <TableHead>Category</TableHead>
                         <TableHead>Staff</TableHead>
-                        <TableHead>Notes</TableHead>
+                        <TableHead>Item</TableHead>
+                        <TableHead className="text-right">Opening</TableHead>
+                        <TableHead className="text-right">Restock</TableHead>
+                        <TableHead className="text-right">Issued</TableHead>
+                        <TableHead className="text-right">Closing</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {paginatedHistory.map((r) => {
-                        const type = r.data?.type
-                        const isRestock = type === 'stock_restock'
-                        return (
-                          <TableRow key={r.id} className="hover:bg-gray-50">
-                            <TableCell className="text-sm text-gray-600 whitespace-nowrap">
-                              {r.data?.date || new Date(r.created_at).toLocaleDateString()}
-                            </TableCell>
-                            <TableCell className="font-medium text-gray-900">
-                              {r.data?.item_name}
-                            </TableCell>
-                            <TableCell>
-                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                                isRestock ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                              }`}>
-                                {isRestock ? 'Restock' : 'Issued'}
-                              </span>
-                            </TableCell>
-                            <TableCell className={`text-right font-mono font-medium ${
-                              isRestock ? 'text-green-600' : 'text-error'
-                            }`}>
-                              {isRestock ? '+' : '-'}{r.data?.quantity}
-                            </TableCell>
-                            <TableCell className="text-sm text-gray-500">
-                              {r.data?.staff_name || '—'}
-                            </TableCell>
-                            <TableCell className="text-sm text-gray-500 max-w-[200px] truncate">
-                              {r.data?.notes || '—'}
-                            </TableCell>
-                          </TableRow>
-                        )
-                      })}
+                      {paginatedHistory.map((r) => (
+                        <TableRow key={r.id} className="hover:bg-gray-50">
+                          <TableCell className="text-sm text-gray-600 whitespace-nowrap">
+                            {r.date}
+                          </TableCell>
+                          <TableCell className="text-sm text-gray-600">
+                            {r.category || '—'}
+                          </TableCell>
+                          <TableCell className="text-sm text-gray-500">
+                            {r.staff_name || '—'}
+                          </TableCell>
+                          <TableCell className="font-medium text-gray-900">
+                            {r.item_name}
+                          </TableCell>
+                          <TableCell className="text-right">{r.opening_stock}</TableCell>
+                          <TableCell className="text-right text-green-600">{r.quantity_in > 0 ? `+${r.quantity_in}` : '-'}</TableCell>
+                          <TableCell className="text-right text-red-600">{r.quantity_out > 0 ? `-${r.quantity_out}` : '-'}</TableCell>
+                          <TableCell className="text-right font-medium">{r.closing_stock}</TableCell>
+                        </TableRow>
+                      ))}
                       {paginatedHistory.length === 0 && (
                          <TableRow>
-                           <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+                           <TableCell colSpan={7} className="text-center py-8 text-gray-500">
                              No history records found.
                            </TableCell>
                          </TableRow>

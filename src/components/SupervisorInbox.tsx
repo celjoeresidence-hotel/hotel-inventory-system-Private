@@ -262,7 +262,7 @@ export default function SupervisorInbox() {
             <div className="p-2 bg-green-100 text-green-700 rounded-lg">
               <IconList className="w-6 h-6" />
             </div>
-            Pending Approvals
+            Daily Activities
           </h1>
           <p className="text-gray-500 mt-1 ml-12">Review and manage operational record submissions</p>
         </div>
