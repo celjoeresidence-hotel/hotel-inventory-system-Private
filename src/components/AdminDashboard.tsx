@@ -241,9 +241,13 @@ export default function AdminDashboard() {
       // Fetch room names
       if (topRooms.length > 0 || worstRooms.length > 0) {
           const ids = [...new Set([...topRooms.map(r => r.room_id), ...worstRooms.map(r => r.room_id)])];
-          const { data: rData } = await client.from('rooms').select('id, room_number').in('id', ids);
+          const { data: rData } = await client.from('rooms').select('id, room_number, room_type').in('id', ids);
           const map: Record<string, string> = {};
-          rData?.forEach((r: any) => map[r.id] = r.room_number);
+          rData?.forEach((r: any) => {
+            const num = r.room_number;
+            const typ = r.room_type;
+            map[r.id] = typ ? `${num} (${typ})` : String(num);
+          });
           setRoomNames(map);
       }
 
@@ -377,7 +381,7 @@ export default function AdminDashboard() {
                         <div key={i} className="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-lg shadow-sm">
                             <div className="flex items-center gap-3">
                                 <span className="w-6 h-6 flex items-center justify-center bg-green-100 text-green-700 font-bold text-xs rounded-full">{i + 1}</span>
-                                <span className="font-medium">Room {roomNames[r.room_id] || r.room_id}</span>
+                                <span className="font-medium">Room {roomNames[r.room_id] || 'Unknown Room'}</span>
                             </div>
                             <div className="text-right">
                                 <div className="font-bold text-gray-900">{formatCurrency(r.revenue)}</div>
@@ -395,7 +399,7 @@ export default function AdminDashboard() {
                         <div key={i} className="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-lg shadow-sm opacity-75">
                             <div className="flex items-center gap-3">
                                 <span className="w-6 h-6 flex items-center justify-center bg-gray-100 text-gray-500 font-bold text-xs rounded-full">{i + 1}</span>
-                                <span className="font-medium">Room {roomNames[r.room_id] || r.room_id}</span>
+                                <span className="font-medium">Room {roomNames[r.room_id] || 'Unknown Room'}</span>
                             </div>
                             <div className="text-right">
                                 <div className="font-bold text-gray-900">{formatCurrency(r.revenue)}</div>

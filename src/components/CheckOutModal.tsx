@@ -14,7 +14,7 @@ interface CheckOutModalProps {
 }
 
 export default function CheckOutModal({ isOpen, onClose, booking, onSuccess }: CheckOutModalProps) {
-  const { staffId } = useAuth();
+  const { staffId, ensureActiveSession } = useAuth();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
@@ -97,6 +97,8 @@ export default function CheckOutModal({ isOpen, onClose, booking, onSuccess }: C
       };
 
       if (!supabase) throw new Error('Supabase client not initialized');
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) { setError('Session expired. Please sign in again to continue.'); return; }
       
       // 1. Insert Checkout Record
       const { error: insertError } = await supabase!

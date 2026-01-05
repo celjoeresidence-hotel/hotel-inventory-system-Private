@@ -31,6 +31,10 @@ export function RecordDetails({ record }: { record: OperationalRecordRow }) {
   const type = record.entity_type;
 
   if (type === 'front_desk') {
+    // Resolve room identity for display
+    const roomId = d?.stay?.room_id || d?.room_id;
+    const roomNumber = d?.stay?.room_number || d?.room_number;
+    const displayRoom = roomNumber ? roomNumber : undefined;
     return (
       <div className="space-y-1">
         <Section title="Guest Info">
@@ -40,7 +44,7 @@ export function RecordDetails({ record }: { record: OperationalRecordRow }) {
           <DetailRow label="ID Ref" value={d?.guest?.id_reference} />
         </Section>
         <Section title="Stay Info">
-          <DetailRow label="Room ID" value={d?.stay?.room_id} />
+          <DetailRow label="Room" value={displayRoom ?? (roomId ? 'Unknown Room' : '—')} />
           <DetailRow label="Check-in" value={d?.stay?.check_in} />
           <DetailRow label="Check-out" value={d?.stay?.check_out} />
           <DetailRow label="Adults" value={d?.stay?.adults} />

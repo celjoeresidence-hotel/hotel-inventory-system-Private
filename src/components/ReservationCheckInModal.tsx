@@ -3,6 +3,7 @@ import { supabase } from '../supabaseClient';
 import { Button } from './ui/Button';
 import { Modal } from './ui/Modal';
 import { IconCheckCircle, IconLoader } from './ui/Icons';
+import { useAuth } from '../context/AuthContext';
 
 interface ReservationCheckInModalProps {
   isOpen: boolean;
@@ -14,6 +15,7 @@ interface ReservationCheckInModalProps {
 export default function ReservationCheckInModal({ isOpen, onClose, booking, onSuccess }: ReservationCheckInModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { ensureActiveSession } = useAuth();
 
   if (!booking) return null;
 
@@ -23,6 +25,8 @@ export default function ReservationCheckInModal({ isOpen, onClose, booking, onSu
     try {
       const client = supabase;
       if (!client) throw new Error('Supabase client not initialized');
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) { setError('Session expired. Please sign in again to continue.'); return; }
 
       // 1. Update the booking to mark as checked_in
       // We store 'checked_in' status in metadata since enum is locked

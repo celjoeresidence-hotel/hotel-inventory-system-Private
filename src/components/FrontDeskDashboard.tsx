@@ -6,10 +6,11 @@ import ActiveGuestList from './ActiveGuestList';
 import FrontDeskStats from './FrontDeskStats';
 import FrontDeskHistory from './FrontDeskHistory';
 import { Button } from './ui/Button';
-import { IconLayout, IconUserCheck, IconUsers, IconHistory, IconCalendar, IconRefresh } from './ui/Icons';
+import { IconLayout, IconUserCheck, IconUsers, IconHistory, IconCalendar, IconRefresh, IconBroom } from './ui/Icons';
 import ReservationList from './ReservationList';
+import HousekeepingTab from './HousekeepingTab';
 
-type Tab = 'dashboard' | 'checkin' | 'guests' | 'history' | 'reservations';
+type Tab = 'dashboard' | 'checkin' | 'guests' | 'history' | 'reservations' | 'housekeeping';
 
 export default function FrontDeskDashboard() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
@@ -101,6 +102,17 @@ export default function FrontDeskDashboard() {
             <IconUserCheck className="w-5 h-5" />
             Check In
           </button>
+          <button
+            onClick={() => setActiveTab('housekeeping')}
+            className={`pb-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
+              activeTab === 'housekeeping'
+                ? 'border-green-600 text-green-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <IconBroom className="w-5 h-5" />
+            Housekeeping
+          </button>
         </nav>
       </div>
 
@@ -152,6 +164,13 @@ export default function FrontDeskDashboard() {
         {activeTab === 'checkin' && (
           <div className="max-w-4xl mx-auto">
             <FrontDeskForm onSuccess={handleCheckInSuccess} />
+          </div>
+        )}
+        
+        {activeTab === 'housekeeping' && (
+          <div className="space-y-6">
+            <h2 className="text-xl font-bold text-gray-900">Housekeeping</h2>
+            <HousekeepingTab onSubmitted={refresh} />
           </div>
         )}
       </div>

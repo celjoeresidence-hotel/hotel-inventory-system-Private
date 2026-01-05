@@ -224,7 +224,7 @@ function AuditLogInner() {
   function actorLabel(id: string | null) {
     if (!id) return '—';
     const a = actors[id];
-    if (!a) return id;
+    if (!a) return 'Unknown';
     return a.full_name ? `${a.full_name}${a.role ? ` (${a.role})` : ''}` : (a.email || id);
   }
 

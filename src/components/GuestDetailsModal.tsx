@@ -20,7 +20,7 @@ interface GuestDetailsModalProps {
 type Tab = 'overview' | 'financials' | 'history';
 
 export default function GuestDetailsModal({ isOpen, onClose, booking, onUpdate }: GuestDetailsModalProps) {
-  const { user, role, staffId } = useAuth();
+  const { user, role, staffId, ensureActiveSession } = useAuth();
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [loading, setLoading] = useState(false);
   const [relatedRecords, setRelatedRecords] = useState<any[]>([]);
@@ -102,6 +102,8 @@ export default function GuestDetailsModal({ isOpen, onClose, booking, onUpdate }
     if (!booking || !penaltyAmount || !penaltyReason) return;
     try {
         setLoading(true);
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) { alert('Session expired. Please sign in again to continue.'); setLoading(false); return; }
         const { error } = await supabase!.from('operational_records').insert({
             entity_type: 'front_desk',
             data: {
@@ -134,6 +136,8 @@ export default function GuestDetailsModal({ isOpen, onClose, booking, onUpdate }
     if (!booking || !paymentAmount) return;
     try {
         setLoading(true);
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) { alert('Session expired. Please sign in again to continue.'); setLoading(false); return; }
         const { error } = await supabase!.from('operational_records').insert({
             entity_type: 'front_desk',
             data: {
@@ -181,6 +185,8 @@ export default function GuestDetailsModal({ isOpen, onClose, booking, onUpdate }
 
     try {
         setLoading(true);
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) { alert('Session expired. Please sign in again to continue.'); setLoading(false); return; }
         // We update the original booking to 'cancelled' status? 
         // Or insert a cancellation record that invalidates the stay?
         // Since operational_records are append-only, we insert a 'cancellation_record'.

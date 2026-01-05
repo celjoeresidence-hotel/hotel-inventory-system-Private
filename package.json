@@ -4,7 +4,7 @@
   "description": "Hotel Inventory Management System",
   "author": "Celjoe Residence Hotel",
   "private": true,
-  "version": "0.0.7",
+  "version": "0.0.9",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -22,7 +22,7 @@
     "appId": "com.hotel.inventory",
     "productName": "Hotel Inventory System",
     "directories": {
-      "output": "release-installer-7"
+      "output": "release-installer-9"
     },
     "files": [
       "dist/**/*",
@@ -31,6 +31,7 @@
     "win": {
       "target": "nsis",
       "icon": "build/icon.png",
+      "artifactName": "Hotel-Inventory-System-Setup-${version}.${ext}",
       "forceCodeSigning": false,
       "verifyUpdateCodeSignature": false
     },

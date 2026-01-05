@@ -66,7 +66,7 @@ export interface RoomStatus {
   room_name?: string;
   room_type?: string;
   price_per_night: number;
-  status: 'available' | 'occupied' | 'reserved' | 'cleaning';
+  status: 'available' | 'occupied' | 'reserved' | 'cleaning' | 'maintenance' | 'pending';
   current_guest?: string;
   check_out_date?: string;
 }

@@ -30,7 +30,7 @@ interface MonthlyRow {
 }
 
 export default function BarStockForm() {
-  const { role, session, isConfigured } = useAuth()
+  const { role, session, isConfigured, ensureActiveSession } = useAuth()
 
   // Role gating
   if (role !== 'bar') {
@@ -525,6 +525,8 @@ export default function BarStockForm() {
 
     try {
       setSubmitting(true)
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true))
+      if (!ok) { setError('Session expired. Please sign in again to continue.'); setSubmitting(false); return }
       const { error: insertError } = await supabase.from('operational_records').insert(records)
       if (insertError) { setError(insertError.message); return }
       

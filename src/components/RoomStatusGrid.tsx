@@ -8,7 +8,7 @@ interface RoomStatusGridProps {
 }
 
 export default function RoomStatusGrid({ rooms, loading }: RoomStatusGridProps) {
-  const [filterStatus, setFilterStatus] = useState<'all' | 'available' | 'occupied' | 'reserved'>('all');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'available' | 'occupied' | 'reserved' | 'cleaning' | 'maintenance' | 'pending'>('all');
   const [search, setSearch] = useState('');
 
   const filtered = rooms.filter(r => {
@@ -23,6 +23,9 @@ export default function RoomStatusGrid({ rooms, loading }: RoomStatusGridProps) 
     available: rooms.filter(r => r.status === 'available').length,
     occupied: rooms.filter(r => r.status === 'occupied').length,
     reserved: rooms.filter(r => r.status === 'reserved').length,
+    cleaning: rooms.filter(r => r.status === 'cleaning').length,
+    maintenance: rooms.filter(r => r.status === 'maintenance').length,
+    pending: rooms.filter(r => r.status === 'pending').length,
   };
 
   if (loading) return <div className="p-8 text-center text-gray-500">Loading rooms...</div>;
@@ -50,11 +53,29 @@ export default function RoomStatusGrid({ rooms, loading }: RoomStatusGridProps) 
           >
             Occupied ({stats.occupied})
           </button>
-           <button
+          <button
             onClick={() => setFilterStatus('reserved')}
             className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors ${filterStatus === 'reserved' ? 'bg-orange-500 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}
           >
             Reserved ({stats.reserved})
+          </button>
+          <button
+            onClick={() => setFilterStatus('cleaning')}
+            className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors ${filterStatus === 'cleaning' ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+          >
+            Cleaning ({stats.cleaning})
+          </button>
+          <button
+            onClick={() => setFilterStatus('maintenance')}
+            className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors ${filterStatus === 'maintenance' ? 'bg-purple-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+          >
+            Maintenance ({stats.maintenance})
+          </button>
+          <button
+            onClick={() => setFilterStatus('pending')}
+            className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors ${filterStatus === 'pending' ? 'bg-gray-900 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+          >
+            Pending ({stats.pending})
           </button>
         </div>
 
@@ -81,6 +102,8 @@ export default function RoomStatusGrid({ rooms, loading }: RoomStatusGridProps) 
               ${room.status === 'occupied' ? 'border-red-100 bg-red-50/30' : ''}
               ${room.status === 'reserved' ? 'border-orange-100 bg-orange-50/30' : ''}
               ${room.status === 'cleaning' ? 'border-blue-100 bg-blue-50/30' : ''}
+              ${room.status === 'maintenance' ? 'border-purple-100 bg-purple-50/30' : ''}
+              ${room.status === 'pending' ? 'border-gray-100 bg-gray-50/30' : ''}
             `}
           >
             <div className="flex justify-between items-start mb-2">
@@ -94,7 +117,10 @@ export default function RoomStatusGrid({ rooms, loading }: RoomStatusGridProps) 
               <div className={`w-3 h-3 rounded-full ${
                 room.status === 'available' ? 'bg-green-500' : 
                 room.status === 'occupied' ? 'bg-red-500' : 
-                room.status === 'reserved' ? 'bg-orange-500' : 'bg-gray-400'
+                room.status === 'reserved' ? 'bg-orange-500' :
+                room.status === 'cleaning' ? 'bg-blue-500' :
+                room.status === 'maintenance' ? 'bg-purple-500' :
+                room.status === 'pending' ? 'bg-gray-500' : 'bg-gray-400'
               }`} />
             </div>
             

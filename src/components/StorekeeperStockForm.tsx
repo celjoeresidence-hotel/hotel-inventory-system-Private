@@ -40,7 +40,7 @@ type MonthlyRow = {
 }
 
 export default function StorekeeperStockForm() {
-  const { role, session, isConfigured } = useAuth()
+  const { role, session, isConfigured, ensureActiveSession } = useAuth()
 
   // Categories and collections
   const [categories, setCategories] = useState<{ name: string; active: boolean }[]>([])
@@ -407,6 +407,8 @@ export default function StorekeeperStockForm() {
     if (records.length === 0) { setError('Enter restocked or issued quantities for at least one item.'); return }
     try {
       setSubmitting(true)
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true))
+      if (!ok) { setError('Session expired. Please sign in again to continue.'); setSubmitting(false); return }
       const { error: insertError } = await supabase.from('operational_records').insert(records)
       if (insertError) { setError(insertError.message); return }
       setSuccess('Storekeeper daily stock submitted for supervisor approval.')

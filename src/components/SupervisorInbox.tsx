@@ -46,7 +46,7 @@ const DEPARTMENT_LABEL: Record<string, string> = {
 };
 
 export default function SupervisorInbox() {
-  const { session, role, isConfigured } = useAuth();
+  const { session, role, isConfigured, ensureActiveSession } = useAuth();
   const [records, setRecords] = useState<OperationalRecordRow[]>([]);
   const [selectedRecord, setSelectedRecord] = useState<OperationalRecordRow | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +68,7 @@ export default function SupervisorInbox() {
   
   const [showDetails, setShowDetails] = useState<boolean>(false);
   const [profilesMap, setProfilesMap] = useState<Record<string, { full_name: string | null; role: string | null }>>({});
+  const [roomsMap, setRoomsMap] = useState<Record<string, { room_number: string; room_name: string | null }>>({});
 
   const canUse = useMemo(() => Boolean(isConfigured && session && (role === 'supervisor' || role === 'manager' || role === 'admin')), [isConfigured, session, role]);
 
@@ -104,6 +105,87 @@ export default function SupervisorInbox() {
     const rb = groupsByOriginal[b]?.[0];
     return (rb?.created_at ? new Date(rb.created_at).getTime() : 0) - (ra?.created_at ? new Date(ra.created_at).getTime() : 0);
   }), [groupsByOriginal]);
+
+  function summarizeRecord(r: OperationalRecordRow) {
+    const d: any = r.data || {};
+    const dept = DEPARTMENT_LABEL[r.entity_type ?? ''] ?? r.entity_type ?? '';
+    const type = String(d.type ?? r.entity_type ?? '').toLowerCase();
+    const when = formatDate(r.created_at || '');
+
+    // Front Desk contexts
+    if (r.entity_type === 'front_desk') {
+      if (type === 'room_booking' || type === 'room_reservation' || type === 'guest_check_in' || type === 'guest_check_out') {
+        const rn = d.room_number || roomsMap[d.room_id]?.room_number || 'Room';
+        const guest = d.guest?.full_name || d.guest_name || 'Guest';
+        const checkIn = d.stay?.check_in || d.start_date || d.check_in_date;
+        const checkOut = d.stay?.check_out || d.end_date || d.check_out_date;
+        const nights = d.nights ?? d.stay?.nights;
+        let statusChange = '';
+        if (type === 'guest_check_in') statusChange = 'available → occupied';
+        else if (type === 'guest_check_out') statusChange = 'occupied → available';
+        return `${dept}: ${guest} • ${rn} • ${checkIn} → ${checkOut}${nights ? ` • ${nights} nights` : ''}${statusChange ? ` • ${statusChange}` : ''} • ${when}`;
+      }
+      if (type === 'penalty' || type === 'penalty_fee' || type === 'payment' || type === 'payment_record' || type === 'discount_applied') {
+        const guest = d.guest?.full_name || d.guest_name || 'Guest';
+        const amount = d.amount ?? d.total_cost ?? d.financial_amount ?? d.discount_amount ?? 0;
+        const label = type.includes('penalty') ? 'Penalty' : (type.includes('discount') ? 'Discount' : 'Payment');
+        return `${dept}: ${label} • ${guest} • ${Number(amount).toLocaleString()} • ${when}`;
+      }
+      if (type === 'stay_cancellation' || type === 'stay_extension') {
+        const rn = d.room_number || roomsMap[d.room_id]?.room_number || 'Room';
+        const guest = d.guest?.full_name || d.guest_name || 'Guest';
+        const note = d.reason || d.notes || '';
+        const label = type === 'stay_cancellation' ? 'Cancellation' : 'Extension';
+        return `${dept}: ${label} • ${guest} • ${rn}${note ? ` • ${note}` : ''} • ${when}`;
+      }
+      if (type === 'housekeeping_report') {
+        const rn = d.room_number || roomsMap[d.room_id]?.room_number || 'Room';
+        const hk = d.housekeeper_name || 'Housekeeper';
+        const status = String(d.housekeeping_status || 'inspected').replace(/_/g, ' ');
+        return `${dept}: Housekeeping • ${rn} • ${status} • ${hk} • ${d.report_date || when}`;
+      }
+    }
+
+    // Storekeeper contexts
+    if (r.entity_type === 'storekeeper') {
+      const item = d.item_name || 'Item';
+      const unit = d.unit || d.item_unit;
+      if (type === 'opening_stock') {
+        const qty = d.quantity ?? d.opening_stock ?? 0;
+        return `Store: Opening Stock • ${item} • ${qty}${unit ? ` ${unit}` : ''} • ${when}`;
+      }
+      if (type === 'stock_restock') {
+        const qty = d.quantity ?? d.restocked ?? 0;
+        const price = d.unit_price ?? 0;
+        const total = Number(qty) * Number(price);
+        return `Store: Restock • ${item} • +${qty}${unit ? ` ${unit}` : ''} @ ${price} • Total ${total.toLocaleString()} • ${when}`;
+      }
+      if (type === 'stock_issued') {
+        const qty = d.quantity ?? d.issued ?? 0;
+        const toDept = d.to_department || d.department || '';
+        return `Store: Issued • ${item} • -${qty}${unit ? ` ${unit}` : ''}${toDept ? ` → ${DEPARTMENT_LABEL[toDept] || toDept}` : ''} • ${when}`;
+      }
+    }
+
+    // Bar/Kitchen contexts
+    if (r.entity_type === 'bar' || r.entity_type === 'kitchen') {
+      const item = d.item_name || 'Item';
+      const unit = d.unit || '';
+      const deptLabel = r.entity_type === 'bar' ? 'Bar' : 'Kitchen';
+      const restocked = Number(d.restocked ?? 0);
+      const sold = Number(d.sold ?? d.consumed ?? 0);
+      const price = Number(d.unit_price ?? 0);
+      const total = sold > 0 && price > 0 ? sold * price : undefined;
+      const parts: string[] = [];
+      if (restocked > 0) parts.push(`+${restocked}${unit ? ` ${unit}` : ''} restocked`);
+      if (sold > 0) parts.push(`-${sold}${unit ? ` ${unit}` : ''} ${deptLabel === 'Bar' ? 'sold' : 'consumed'}`);
+      const tail = total ? ` • Total ${total.toLocaleString()}` : '';
+      return `${deptLabel}: ${item} • ${parts.join(' • ') || 'Activity'}${tail} • ${when}`;
+    }
+
+    // Fallback
+    return `${DEPARTMENT_LABEL[r.entity_type ?? ''] ?? r.entity_type ?? 'Activity'} • ${String(d.type || 'record').replace(/_/g, ' ')} • ${when}`;
+  }
 
   useEffect(() => {
     async function fetchPending() {
@@ -147,14 +229,34 @@ export default function SupervisorInbox() {
         const ids = Array.from(new Set(safe.map((r) => r.submitted_by).filter(Boolean))) as string[];
         if (ids.length) {
           const { data: profs, error: pErr } = await sb.from('profiles').select('id, full_name, role').in('id', ids);
+          const map: Record<string, { full_name: string | null; role: string | null }> = {};
           if (!pErr && profs) {
-            const map: Record<string, { full_name: string | null; role: string | null }> = {};
             for (const p of profs as any[]) {
               map[p.id] = { full_name: p.full_name ?? null, role: p.role ?? null };
             }
-            setProfilesMap(map);
           }
+          // Fallback: resolve via staff_profiles.user_id
+          const { data: staffs } = await sb.from('staff_profiles').select('user_id, full_name, role').in('user_id', ids);
+          if (staffs) {
+            for (const s of staffs as any[]) {
+              map[s.user_id] = { full_name: s.full_name ?? map[s.user_id]?.full_name ?? null, role: s.role ?? map[s.user_id]?.role ?? null };
+            }
+          }
+          setProfilesMap(map);
         }
+
+        // Prefetch active rooms for identity resolution (room_id -> room_number)
+        try {
+          const { data: rooms } = await sb
+            .from('rooms')
+            .select('id, room_number, room_name')
+            .eq('is_active', true);
+          const rmap: Record<string, { room_number: string; room_name: string | null }> = {};
+          for (const r of (rooms || []) as any[]) {
+            rmap[String(r.id)] = { room_number: String(r.room_number), room_name: r.room_name ?? null };
+          }
+          setRoomsMap(rmap);
+        } catch {}
       } finally {
         setLoadingList(false);
       }
@@ -206,6 +308,11 @@ export default function SupervisorInbox() {
     setSuccessMessage('');
     setActionLoading(true);
     try {
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) {
+        setError('Session expired. Please sign in again to continue.');
+        return;
+      }
       for (const oid of originalIds) {
         const group = groupsByOriginal[oid] || [];
         for (const rec of group) {
@@ -369,6 +476,7 @@ export default function SupervisorInbox() {
                     </TableHead>
                     <TableHead className="sticky left-10 z-20 bg-gray-50 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">Department</TableHead>
                     <TableHead>Type</TableHead>
+                    <TableHead>Context</TableHead>
                     <TableHead>Submitted By</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
@@ -398,6 +506,9 @@ export default function SupervisorInbox() {
                         </TableCell>
                         <TableCell className="text-gray-900 font-medium capitalize">
                           {String(first?.data?.type ?? first?.entity_type ?? 'Record').replace(/_/g, ' ')}
+                        </TableCell>
+                        <TableCell className="text-gray-700">
+                          {first ? summarizeRecord(first) : '—'}
                         </TableCell>
                         <TableCell className="text-gray-600">
                           <div className="flex items-center gap-2">
@@ -482,6 +593,9 @@ export default function SupervisorInbox() {
                         <h4 className="font-medium text-gray-900 capitalize mb-1 truncate">
                           {String(first?.data?.type ?? first?.entity_type ?? 'Record').replace(/_/g, ' ')}
                         </h4>
+                        <div className="text-xs text-gray-700 mb-1 line-clamp-2">
+                          {first ? summarizeRecord(first) : '—'}
+                        </div>
                         <div className="flex items-center gap-1.5 text-xs text-gray-500">
                           <div className="w-5 h-5 rounded-full bg-gray-100 flex items-center justify-center text-[10px] font-bold text-gray-600">
                             {submittedName.charAt(0)}

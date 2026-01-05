@@ -6,6 +6,7 @@ import FrontDeskStats from './FrontDeskStats';
 import FrontDeskHistory from './FrontDeskHistory';
 import FrontDeskAnalyticsView from './FrontDeskAnalyticsView';
 import AuditLog from './AuditLog';
+import HousekeepingTab from './HousekeepingTab.tsx';
 import { Button } from './ui/Button';
 import { 
   IconLayout, 
@@ -13,11 +14,12 @@ import {
   IconHistory, 
   IconRefresh, 
   IconBarChart,
-  IconShield
+  IconShield,
+  IconBroom
 } from './ui/Icons';
 
 type FrontDeskOversightRole = 'supervisor' | 'manager' | 'admin';
-type Tab = 'dashboard' | 'guests' | 'history' | 'analytics' | 'audit';
+type Tab = 'dashboard' | 'guests' | 'history' | 'analytics' | 'audit' | 'housekeeping';
 
 interface FrontDeskOversightProps {
   role: FrontDeskOversightRole;
@@ -117,6 +119,17 @@ export default function FrontDeskOversight({ role }: FrontDeskOversightProps) {
               Audit Log
             </button>
           )}
+          <button
+            onClick={() => setActiveTab('housekeeping')}
+            className={`pb-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
+              activeTab === 'housekeeping'
+                ? 'border-green-600 text-green-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <IconBroom className="w-5 h-5" />
+            Housekeeping
+          </button>
         </nav>
       </div>
 
@@ -174,6 +187,11 @@ export default function FrontDeskOversight({ role }: FrontDeskOversightProps) {
            <div className="space-y-6">
              <AuditLog />
            </div>
+        )}
+        {activeTab === 'housekeeping' && (
+          <div className="space-y-6">
+            <HousekeepingTab onSubmitted={refresh} />
+          </div>
         )}
       </div>
     </div>

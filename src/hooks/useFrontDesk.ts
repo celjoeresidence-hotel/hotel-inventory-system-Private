@@ -33,7 +33,7 @@ export function useFrontDesk() {
 
       if (roomsError) throw roomsError;
 
-      // 2. Fetch Front Desk Records (Bookings & Checkouts)
+      // 2. Fetch Front Desk Records (Bookings, Checkouts, Housekeeping)
       const { data: recordsData, error: recordsError } = await supabase
         .from('operational_records')
         .select('id, original_id, data, created_at, status')
@@ -47,6 +47,7 @@ export function useFrontDesk() {
       const past: BookingWithId[] = [];
       const checkouts: BookingWithId[] = [];
       const reservations: any[] = []; // Store reservations
+      const housekeepingReports: any[] = []; // Store housekeeping reports (latest per room used for status)
       const checkedOutBookingIds = new Set<string>();
 
       // Identify checkouts first
@@ -99,6 +100,11 @@ export function useFrontDesk() {
         if (d.type === 'room_reservation') {
            reservations.push({ ...rec, data: d });
         }
+
+        // Handle Housekeeping Reports
+        if (d.type === 'housekeeping_report') {
+          housekeepingReports.push({ ...rec, data: d });
+        }
       });
 
       setActiveBookings(active);
@@ -133,6 +139,23 @@ export function useFrontDesk() {
           status = 'reserved';
           current_guest = reservation.data.guest.name;
           check_out_date = reservation.data.check_out_date;
+        } else {
+          // Consider latest housekeeping report
+          const latestHK = housekeepingReports
+            .filter(h => String(h.data.room_id) === String(r.id))
+            .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+          if (latestHK) {
+            const hkStatus = String(latestHK.data.housekeeping_status || '').toLowerCase();
+            if (hkStatus === 'dirty') {
+              status = 'cleaning';
+            } else if (hkStatus === 'maintenance') {
+              status = 'maintenance';
+            } else if (hkStatus === 'inspected' || hkStatus === 'cleaned') {
+              status = 'available';
+            } else {
+              status = 'pending';
+            }
+          }
         }
 
         return {

@@ -14,7 +14,7 @@ import { StaffSelect } from './ui/StaffSelect'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/Table'
 
 export default function KitchenStockForm() {
-  const { role, session, isConfigured } = useAuth()
+  const { role, session, isConfigured, ensureActiveSession } = useAuth()
 
   // Role gating remains: screen is for kitchen staff
   if (role !== 'kitchen') {
@@ -310,6 +310,8 @@ export default function KitchenStockForm() {
     }
     try {
       setSubmitting(true)
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true))
+      if (!ok) { setError('Session expired. Please sign in again to continue.'); setSubmitting(false); return }
       const { error: insertError } = await supabase.from('operational_records').insert(records)
       if (insertError) { setError(insertError.message); return }
       setSuccess('Daily stock submitted for supervisor approval.')
