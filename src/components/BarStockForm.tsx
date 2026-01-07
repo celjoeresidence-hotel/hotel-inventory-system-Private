@@ -8,15 +8,18 @@ import { Input } from './ui/Input'
 import { SearchInput } from './ui/SearchInput'
 import { Pagination } from './ui/Pagination'
 import InventoryConsumptionTable from './InventoryConsumptionTable'
-import { IconAlertCircle, IconCheckCircle, IconCoffee, IconHistory } from './ui/Icons'
+import { IconAlertCircle, IconCheckCircle, IconCoffee } from './ui/Icons'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/Table'
 import { StaffSelect } from './ui/StaffSelect'
+import { InventoryHistoryModule } from './InventoryHistoryModule'
 
 interface UIItem {
   item_name: string
   unit: string | null
   unit_price: number | null
   opening_stock: number | null
+  stock_in_db?: number
+  stock_out_db?: number
 }
 
 interface MonthlyRow {
@@ -30,7 +33,7 @@ interface MonthlyRow {
 }
 
 export default function BarStockForm() {
-  const { role, session, isConfigured, ensureActiveSession } = useAuth()
+  const { role, session, isConfigured, ensureActiveSession, isSupervisor, isManager, isAdmin, user } = useAuth()
 
   // Role gating
   if (role !== 'bar') {
@@ -52,6 +55,9 @@ export default function BarStockForm() {
   const [date, setDate] = useState<string>(() => new Date().toISOString().slice(0, 10))
   const [month, setMonth] = useState<string>(() => new Date().toISOString().slice(0, 7))
   
+  // Refresh trigger
+  const [refreshKey, setRefreshKey] = useState(0)
+  
   const [categories, setCategories] = useState<{ name: string; active: boolean }[]>([])
   const [loadingCategories, setLoadingCategories] = useState<boolean>(false)
   const [activeCategory, setActiveCategory] = useState<string>('')
@@ -67,15 +73,12 @@ export default function BarStockForm() {
   const [restockedMap, setRestockedMap] = useState<Record<string, number>>({})
   const [soldMap, setSoldMap] = useState<Record<string, number>>({})
   const [notesMap, setNotesMap] = useState<Record<string, string>>({})
+  
   const [staffName, setStaffName] = useState<string>('')
 
   // Monthly Data
   const [monthlyRows, setMonthlyRows] = useState<MonthlyRow[]>([])
   const [loadingMonthly, setLoadingMonthly] = useState<boolean>(false)
-
-  // History Data
-  const [historyRecords, setHistoryRecords] = useState<any[]>([])
-  const [loadingHistory, setLoadingHistory] = useState<boolean>(false)
 
   const [submitting, setSubmitting] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
@@ -110,21 +113,6 @@ export default function BarStockForm() {
     const start = (page - 1) * PAGE_SIZE
     return filteredMonthly.slice(start, start + PAGE_SIZE)
   }, [filteredMonthly, page])
-
-  // Filtered & Paginated History
-  const filteredHistory = useMemo(() => {
-    if (!searchTerm) return historyRecords
-    const lower = searchTerm.toLowerCase()
-    return historyRecords.filter((r: any) => 
-      (r.item_name || '').toLowerCase().includes(lower) || 
-      (r.staff_name || '').toLowerCase().includes(lower)
-    )
-  }, [historyRecords, searchTerm])
-
-  const paginatedHistory = useMemo(() => {
-    const start = (page - 1) * PAGE_SIZE
-    return filteredHistory.slice(start, start + PAGE_SIZE)
-  }, [filteredHistory, page])
 
   // Fetch categories
   useEffect(() => {
@@ -219,12 +207,13 @@ export default function BarStockForm() {
               unit: r?.unit ?? null,
               unit_price: typeof r?.unit_price === 'number' ? r.unit_price : Number(r?.unit_price ?? null),
               opening_stock: typeof r?.opening_stock === 'number' ? r.opening_stock : Number(r?.opening_stock ?? null),
+              stock_in_db: Number(r?.stock_in_db ?? 0),
+              stock_out_db: Number(r?.stock_out_db ?? 0)
             })).filter((it: any) => it.item_name)
           } else {
-             // Fallback if new RPC fails (e.g. migration not applied)
-             console.warn('get_daily_stock_sheet failed, falling back to legacy fetch', error)
-             // ... (Logic below would need to be reinstated if we want robust fallback, but for now we assume migration)
-             throw new Error('RPC not available')
+            // Fallback if new RPC fails (e.g. migration not applied)
+            console.warn('get_daily_stock_sheet failed, falling back to legacy fetch', error)
+            throw new Error('RPC not available')
           }
         } catch (err) {
             // Fallback: Fetch items + calculate opening stock manually (Old Way)
@@ -237,6 +226,8 @@ export default function BarStockForm() {
                     unit: r?.unit ?? null,
                     unit_price: typeof r?.unit_price === 'number' ? r.unit_price : Number(r?.unit_price ?? null),
                     opening_stock: 0, // Will be filled below
+                    stock_in_db: 0,
+                    stock_out_db: 0
                     })).filter((it: any) => it.item_name)
                 }
             } catch {}
@@ -252,7 +243,6 @@ export default function BarStockForm() {
                     .filter('data->>category', 'eq', activeCategory)
                     .order('created_at', { ascending: false })
                 
-                // (Simplified fallback deduplication logic for brevity, assuming main path works)
                  const latestByOriginal = new Map<string, any>()
                  for (const r of (itemRows ?? [])) {
                     const key = String(r?.original_id ?? r?.id)
@@ -266,13 +256,15 @@ export default function BarStockForm() {
                     unit: r?.data?.unit ?? null,
                     unit_price: Number(r?.data?.unit_price ?? 0),
                     opening_stock: 0,
+                    stock_in_db: 0,
+                    stock_out_db: 0
                  })).filter((it: any) => it.item_name)
             }
             
             // 2. Compute Opening Stock via Ledger RPC
             const { data: openingData } = await supabase
                 .rpc('get_expected_opening_stock_batch', { 
-                    _role: 'bar', 
+                    _role: 'storekeeper', 
                     _report_date: date 
                 })
             const openingMap = new Map<string, number>()
@@ -290,46 +282,16 @@ export default function BarStockForm() {
         computedItems.sort((a, b) => a.item_name.localeCompare(b.item_name))
         setItems(computedItems)
 
-        const rmap: Record<string, number> = {}; const smap: Record<string, number> = {}; const nmap: Record<string, string> = {}
-        for (const it of computedItems) { 
-          rmap[it.item_name] = 0
-          smap[it.item_name] = 0
-          nmap[it.item_name] = ''
-        }
-        setRestockedMap(rmap)
-        setSoldMap(smap)
-        setNotesMap(nmap)
+        // Reset inputs for delta mode
+        setRestockedMap({})
+        setSoldMap({})
+        setNotesMap({})
       } finally {
         setLoadingItems(false)
       }
     }
     fetchItems()
-  }, [isConfigured, session, activeCategory, date, activeTab])
-
-  // Fetch History
-  useEffect(() => {
-    async function fetchHistory() {
-      if (activeTab !== 'history') return
-      setLoadingHistory(true)
-      try {
-        if (!supabase) return
-        const { data, error } = await supabase
-          .from('v_stock_history')
-          .select('*')
-          .eq('role', 'bar')
-          .order('date', { ascending: false })
-          .limit(100)
-        
-        if (error) throw error
-        setHistoryRecords(data ?? [])
-      } catch (err: any) {
-        console.error('Error fetching history:', err)
-      } finally {
-        setLoadingHistory(false)
-      }
-    }
-    fetchHistory()
-  }, [activeTab])
+  }, [isConfigured, session, activeCategory, date, activeTab, refreshKey])
 
   // Monthly Logic
   function getMonthRange(yyyyMM: string) {
@@ -488,38 +450,54 @@ export default function BarStockForm() {
     
     for (const row of items) {
       const o = Number(row.opening_stock ?? 0)
+      const prevR = Number(row.stock_in_db ?? 0)
+      const prevS = Number(row.stock_out_db ?? 0)
+      
       const r = Number(restockedMap[row.item_name] ?? 0)
       const s = Number(soldMap[row.item_name] ?? 0)
       const u = Number(row.unit_price ?? 0)
       const n = notesMap[row.item_name]?.trim()
       
-      // Submit if there's activity OR a note
-      if (r <= 0 && s <= 0 && !n) continue
+      // In delta mode, inputs (r, s) are the deltas themselves
+      const rDelta = r
+      const sDelta = s
+
+      if (rDelta === 0 && sDelta === 0) continue
+
+      // Validation check on TOTALS
+      const totalRestocked = prevR + r
+      const totalSold = prevS + s
       
-      if (s > o + r) { setError(`Sold for ${row.item_name} cannot exceed opening + restocked`); return }
-      const closing = o + r - s
+      if (totalSold > o + totalRestocked) { setError(`Total sold (${totalSold}) for ${row.item_name} cannot exceed opening (${o}) + total restocked (${totalRestocked})`); return }
+      const closing = o + totalRestocked - totalSold
       if (closing < 0) { setError(`Closing stock for ${row.item_name} cannot be negative`); return }
       
-      const total = s * u
+      const total = sDelta * u // Financial amount for this specific transaction (delta)
       
       const payload: BarStockData = {
         date,
         staff_name: staffName,
         item_name: row.item_name,
-        opening_stock: o,
-        restocked: r,
-        sold: s,
-        closing_stock: closing,
+        opening_stock: o, // This is the day's opening stock
+        restocked: rDelta,
+        sold: sDelta,
+        closing_stock: closing, // Current closing stock (snapshot)
         unit_price: u,
         total_amount: total,
         notes: n || undefined
-      } as any // casting to match type if notes is not in interface yet
+      } as any
       
-      records.push({ entity_type: 'bar', data: payload, financial_amount: total })
+      records.push({ 
+        entity_type: 'bar', 
+        data: payload, 
+        financial_amount: total,
+        submitted_by: user?.id ?? null,
+        status: 'pending'
+      } as any)
     }
 
     if (records.length === 0) {
-      setError('Enter restocked or sold quantities (or notes) for at least one item.')
+      setError('No new changes to submit.')
       return
     }
 
@@ -527,21 +505,30 @@ export default function BarStockForm() {
       setSubmitting(true)
       const ok = await (ensureActiveSession?.() ?? Promise.resolve(true))
       if (!ok) { setError('Session expired. Please sign in again to continue.'); setSubmitting(false); return }
-      const { error: insertError } = await supabase.from('operational_records').insert(records)
+      const { data: inserted, error: insertError } = await supabase
+        .from('operational_records')
+        .insert(records)
+        .select('id')
       if (insertError) { setError(insertError.message); return }
       
-      setSuccess('Daily stock submitted for supervisor approval.')
+      if (Array.isArray(inserted) && inserted.length > 0 && (isSupervisor || isManager || isAdmin)) {
+        for (const row of inserted) {
+          const id = (row as any)?.id
+          if (id) {
+            const { error: approveErr } = await supabase.rpc('approve_record', { _id: id })
+            if (approveErr) {}
+          }
+        }
+      }
       
-      // Reset inputs
-      const r: Record<string, number> = {}
-      const s: Record<string, number> = {}
-      const n: Record<string, string> = {}
-      for (const it of items) { r[it.item_name] = 0; s[it.item_name] = 0; n[it.item_name] = '' }
-      setRestockedMap(r)
-      setSoldMap(s)
-      setNotesMap(n)
+      setSuccess('Updates submitted successfully.')
       
-      window.scrollTo({ top: 0, behavior: 'smooth' })
+      // Reset inputs and refresh to show updated "prev" values
+      setRestockedMap({})
+      setSoldMap({})
+      setNotesMap({})
+      setRefreshKey(prev => prev + 1)
+      
     } finally {
       setSubmitting(false)
     }
@@ -797,80 +784,7 @@ export default function BarStockForm() {
       )}
       {/* History */}
       {activeTab === 'history' && (
-        <Card className="p-0 overflow-hidden">
-          <div className="border-b border-gray-100 bg-gray-50/50 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <h3 className="text-lg font-medium text-gray-900 flex items-center gap-2">
-                <IconHistory className="w-5 h-5 text-gray-500" />
-                Submission History
-              </h3>
-              <div className="text-xs font-medium px-2.5 py-0.5 rounded-full bg-gray-100 text-gray-600">
-                {filteredHistory.length} records
-              </div>
-            </div>
-            <div className="w-full sm:w-64">
-              <SearchInput 
-                value={searchTerm} 
-                onChangeValue={setSearchTerm} 
-                placeholder="Search history..." 
-              />
-            </div>
-          </div>
-
-          {loadingHistory ? (
-            <div className="p-8 text-center text-gray-500">Loading history...</div>
-          ) : historyRecords.length === 0 ? (
-             <div className="p-8 text-center text-gray-500">No history found.</div>
-          ) : (
-            <div className="p-0 sm:p-4">
-              <div className="overflow-x-auto border rounded-lg shadow-sm bg-white">
-                <Table>
-                  <TableHeader className="bg-gray-50">
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Category</TableHead>
-                      <TableHead>Staff</TableHead>
-                      <TableHead>Item</TableHead>
-                      <TableHead className="text-right">Opening</TableHead>
-                      <TableHead className="text-right">Restock</TableHead>
-                      <TableHead className="text-right">Sold</TableHead>
-                      <TableHead className="text-right">Closing</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {paginatedHistory.map((r: any) => (
-                      <TableRow key={r.id} className="hover:bg-gray-50">
-                        <TableCell className="text-sm text-gray-600 whitespace-nowrap">{r.date}</TableCell>
-                        <TableCell className="text-sm text-gray-600">{r.category || '—'}</TableCell>
-                        <TableCell className="font-medium text-gray-900">{r.staff_name}</TableCell>
-                        <TableCell>{r.item_name}</TableCell>
-                        <TableCell className="text-right">{r.opening_stock}</TableCell>
-                        <TableCell className="text-right text-green-600">{r.quantity_in > 0 ? `+${r.quantity_in}` : '-'}</TableCell>
-                        <TableCell className="text-right text-red-600">{r.quantity_out > 0 ? `-${r.quantity_out}` : '-'}</TableCell>
-                        <TableCell className="text-right font-medium">{r.closing_stock}</TableCell>
-                      </TableRow>
-                    ))}
-                    {paginatedHistory.length === 0 && (
-                      <TableRow>
-                        <TableCell colSpan={7} className="text-center py-8 text-gray-500">
-                          No matching records found.
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-
-              <div className="mt-4 flex justify-center pb-4">
-                <Pagination
-                  currentPage={page}
-                  totalPages={Math.ceil(filteredHistory.length / PAGE_SIZE)}
-                  onPageChange={setPage}
-                />
-              </div>
-            </div>
-          )}
-        </Card>
+        <InventoryHistoryModule role="bar" />
       )}
 
     </div>

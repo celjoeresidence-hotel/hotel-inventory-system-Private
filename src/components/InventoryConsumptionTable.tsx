@@ -13,6 +13,8 @@ type UIItem = {
   unit: string | null;
   unit_price: number | null;
   opening_stock: number | null;
+  stock_in_db?: number;
+  stock_out_db?: number;
 };
 
 interface Props {
@@ -34,8 +36,6 @@ export default function InventoryConsumptionTable({
   notesMap,
   disabled = false,
   soldLabel = 'Sold',
-
-
   onChangeRestocked,
   onChangeSold,
   onChangeNotes,
@@ -72,9 +72,12 @@ export default function InventoryConsumptionTable({
             const o = Number(row.opening_stock ?? 0);
             const r = Number(restockedMap[row.item_name] ?? 0);
             const s = Number(soldMap[row.item_name] ?? 0);
+            const prevR = Number(row.stock_in_db ?? 0);
+            const prevS = Number(row.stock_out_db ?? 0);
+
             const n = notesMap ? (notesMap[row.item_name] ?? '') : '';
             const uRaw = row.unit_price; // may be null
-            const closing = o + r - s;
+            const closing = o + prevR + r - (prevS + s);
             const totalRaw = typeof uRaw === 'number' && Number.isFinite(uRaw) ? s * uRaw : null;
             
             // Highlight row if there is activity
@@ -91,28 +94,34 @@ export default function InventoryConsumptionTable({
                 <TableCell className="text-gray-500">{row.unit ?? '—'}</TableCell>
                 <TableCell className="text-right font-mono text-gray-600">{Number.isFinite(o) ? o : '—'}</TableCell>
                 <TableCell className="text-right p-2">
-                  <Input
-                    type="number"
-                    min={0}
-                    step={1}
-                    value={r === 0 ? '' : r}
-                    onChange={(e) => onChangeRestocked(row.item_name, e.target.value === '' ? 0 : Number(e.target.value))}
-                    disabled={disabled}
-                    className="text-right h-9 text-sm w-24 ml-auto"
-                    placeholder="0"
-                  />
+                  <div className="flex flex-col items-end gap-1">
+                    <Input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={r === 0 ? '' : r}
+                      onChange={(e) => onChangeRestocked(row.item_name, e.target.value === '' ? 0 : Number(e.target.value))}
+                      disabled={disabled}
+                      className="text-right h-9 text-sm w-24 ml-auto"
+                      placeholder="0"
+                    />
+                    {prevR > 0 && <span className="text-xs text-green-600 font-medium">+{prevR} saved</span>}
+                  </div>
                 </TableCell>
                 <TableCell className="text-right p-2">
-                  <Input
-                    type="number"
-                    min={0}
-                    step={1}
-                    value={s === 0 ? '' : s}
-                    onChange={(e) => onChangeSold(row.item_name, e.target.value === '' ? 0 : Number(e.target.value))}
-                    disabled={disabled}
-                    className="text-right h-9 text-sm w-24 ml-auto"
-                    placeholder="0"
-                  />
+                  <div className="flex flex-col items-end gap-1">
+                    <Input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={s === 0 ? '' : s}
+                      onChange={(e) => onChangeSold(row.item_name, e.target.value === '' ? 0 : Number(e.target.value))}
+                      disabled={disabled}
+                      className="text-right h-9 text-sm w-24 ml-auto"
+                      placeholder="0"
+                    />
+                    {prevS > 0 && <span className="text-xs text-red-600 font-medium">-{prevS} saved</span>}
+                  </div>
                 </TableCell>
                 <TableCell className={`text-right font-mono font-medium ${closing < 0 ? 'text-error' : 'text-gray-900'}`}>
                   {Number.isFinite(closing) ? closing : '—'}

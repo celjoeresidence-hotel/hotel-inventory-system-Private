@@ -23,11 +23,14 @@ import InventoryConsumptionTable from './InventoryConsumptionTable'
 import { SearchInput } from './ui/SearchInput'
 import { Pagination } from './ui/Pagination'
 import { StaffSelect } from './ui/StaffSelect'
+import { InventoryHistoryModule } from './InventoryHistoryModule'
 
 type UIItem = { 
   item_name: string; 
   unit: string | null; 
-  opening_stock: number 
+  opening_stock: number;
+  stock_in_db: number;
+  stock_out_db: number;
 }
 
 type MonthlyRow = { 
@@ -40,7 +43,7 @@ type MonthlyRow = {
 }
 
 export default function StorekeeperStockForm() {
-  const { role, session, isConfigured, ensureActiveSession } = useAuth()
+  const { role, session, isConfigured, ensureActiveSession, isSupervisor, isManager, isAdmin, user } = useAuth()
 
   // Categories and collections
   const [categories, setCategories] = useState<{ name: string; active: boolean }[]>([])
@@ -54,6 +57,9 @@ export default function StorekeeperStockForm() {
   const [searchTerm, setSearchTerm] = useState('')
   const [page, setPage] = useState(1)
   const PAGE_SIZE = 10
+  
+  // Refresh trigger
+  const [refreshKey, setRefreshKey] = useState(0)
 
   // Items and per-item inputs
   const [items, setItems] = useState<UIItem[]>([])
@@ -61,6 +67,11 @@ export default function StorekeeperStockForm() {
   const [restockedMap, setRestockedMap] = useState<Record<string, number>>({})
   const [issuedMap, setIssuedMap] = useState<Record<string, number>>({})
   const [notesMap, setNotesMap] = useState<Record<string, string>>({})
+  
+  // Track initial values loaded from DB to calculate deltas
+  // REMOVED: Delta logic now relies on stock_in_db/stock_out_db from DB, and inputs are always fresh deltas.
+  // const [initialRestockedMap, setInitialRestockedMap] = useState<Record<string, number>>({})
+  // const [initialIssuedMap, setInitialIssuedMap] = useState<Record<string, number>>({})
 
   const [submitting, setSubmitting] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
@@ -72,8 +83,6 @@ export default function StorekeeperStockForm() {
   const [month, setMonth] = useState<string>(() => new Date().toISOString().slice(0, 7))
   const [monthlyRows, setMonthlyRows] = useState<MonthlyRow[]>([])
   const [loadingMonthly, setLoadingMonthly] = useState<boolean>(false)
-  const [historyRecords, setHistoryRecords] = useState<any[]>([])
-  const [loadingHistory, setLoadingHistory] = useState<boolean>(false)
   const [staffName, setStaffName] = useState<string>('')
 
   // Reset search/page on tab/collection change
@@ -105,48 +114,6 @@ export default function StorekeeperStockForm() {
     const start = (page - 1) * PAGE_SIZE
     return filteredMonthly.slice(start, start + PAGE_SIZE)
   }, [filteredMonthly, page])
-
-  // Fetch History Records
-  useEffect(() => {
-    async function fetchHistory() {
-      if (activeTab !== 'history') return
-      setLoadingHistory(true)
-      setError(null)
-      try {
-        if (!supabase) return
-        const { data, error } = await supabase
-          .from('v_stock_history')
-          .select('*')
-          .eq('role', 'storekeeper')
-          .order('date', { ascending: false })
-          .limit(100)
-        
-        if (error) throw error
-        setHistoryRecords(data ?? [])
-      } catch (err: any) {
-        setError(err.message)
-      } finally {
-        setLoadingHistory(false)
-      }
-    }
-    fetchHistory()
-  }, [activeTab])
-
-  // Filtered History
-  const filteredHistory = useMemo(() => {
-    if (!searchTerm) return historyRecords
-    const lower = searchTerm.toLowerCase()
-    return historyRecords.filter(r => 
-      (r.item_name || '').toLowerCase().includes(lower) || 
-      (r.staff_name || '').toLowerCase().includes(lower) ||
-      (r.notes || '').toLowerCase().includes(lower)
-    )
-  }, [historyRecords, searchTerm])
-
-  const paginatedHistory = useMemo(() => {
-    const start = (page - 1) * PAGE_SIZE
-    return filteredHistory.slice(start, start + PAGE_SIZE)
-  }, [filteredHistory, page])
 
   if (role !== 'storekeeper') {
     return (
@@ -282,6 +249,8 @@ export default function StorekeeperStockForm() {
               item_name: String(r?.item_name ?? ''),
               unit: r?.unit ?? null,
               opening_stock: typeof r?.opening_stock === 'number' ? r.opening_stock : Number(r?.opening_stock ?? null),
+              stock_in_db: Number(r?.stock_in_db ?? 0),
+              stock_out_db: Number(r?.stock_out_db ?? 0)
             })).filter((it: any) => it.item_name)
           } else {
             console.warn('get_daily_stock_sheet failed or missing, falling back to legacy fetch', error)
@@ -343,25 +312,57 @@ export default function StorekeeperStockForm() {
             }
           }
 
+          // 3. Fetch today's transactions for Fallback
+          const todayRestocked: Record<string, number> = {}
+          const todayIssued: Record<string, number> = {}
+          try {
+            const { data: txData, error: txError } = await supabase.rpc('get_daily_report_details', {
+              _department: 'storekeeper',
+              _date: date
+            })
+            if (!txError && txData) {
+              for (const tx of (txData as any[])) {
+                const item = tx.item_name
+                const qty = Number(tx.quantity ?? 0)
+                const type = tx.type
+                if (type === 'stock_restock') todayRestocked[item] = (todayRestocked[item] ?? 0) + qty
+                else if (type === 'stock_issued') todayIssued[item] = (todayIssued[item] ?? 0) + qty
+              }
+            }
+          } catch (err) { console.error('Failed to fetch daily transactions', err) }
+
           for (const it of base) {
             const opening = openingMap.get(it.item_name) ?? 0
-            computed.push({ item_name: it.item_name, unit: it.unit ?? null, opening_stock: opening })
+            computed.push({ 
+              item_name: it.item_name, 
+              unit: it.unit ?? null, 
+              opening_stock: opening,
+              stock_in_db: todayRestocked[it.item_name] ?? 0,
+              stock_out_db: todayIssued[it.item_name] ?? 0
+            })
           }
         }
         
         // Sort by item name
         computed.sort((a, b) => a.item_name.localeCompare(b.item_name))
-        setItems(computed)
         
-        const rmap: Record<string, number> = {}; const imap: Record<string, number> = {}; const nmap: Record<string, string> = {}
-        for (const it of computed) { rmap[it.item_name] = 0; imap[it.item_name] = 0; nmap[it.item_name] = '' }
-        setRestockedMap(rmap)
-        setIssuedMap(imap)
-        setNotesMap(nmap)
+        setItems(computed)
+        // Reset inputs to empty (Delta Mode)
+        // Only reset if we are loading fresh data (e.g. date change or category change)
+        // But here we are inside fetchItems which runs on dependencies.
+        // We should probably preserve inputs if we are just refreshing? 
+        // No, if date changes, inputs should clear.
+        // If category changes, inputs should clear.
+        // If just refreshing after submit, we want inputs to clear.
+        // So clearing here is safe.
+        setRestockedMap({})
+        setIssuedMap({})
+        setNotesMap({})
+
       } finally { setLoadingItems(false) }
     }
     fetchItems()
-  }, [isConfigured, session, activeCategory, selectedCollection, date, activeTab])
+  }, [isConfigured, session, activeCategory, selectedCollection, date, activeTab, refreshKey])
 
   // Input handlers
   const handleChangeRestocked = (name: string, value: number) => {
@@ -389,33 +390,79 @@ export default function StorekeeperStockForm() {
 
     const records: { entity_type: string; data: any; financial_amount: number }[] = []
     for (const row of items) {
-      const r = Number(restockedMap[row.item_name] ?? 0)
-      const i = Number(issuedMap[row.item_name] ?? 0)
+      const rInput = Number(restockedMap[row.item_name] ?? 0)
+      const iInput = Number(issuedMap[row.item_name] ?? 0)
       const note = (notesMap[row.item_name] ?? '').trim()
+      
       const opening = Number(row.opening_stock ?? 0)
-      const closing = opening + r - i
-      if (r < 0 || i < 0) { setError('Quantities must be ≥ 0'); return }
-      if (i > opening + r) { setError(`Issued for ${row.item_name} cannot exceed opening + restocked`); return }
+      const prevRestock = Number(row.stock_in_db ?? 0)
+      const prevIssued = Number(row.stock_out_db ?? 0)
+
+      const totalRestock = prevRestock + rInput
+      const totalIssued = prevIssued + iInput
+      const closing = opening + totalRestock - totalIssued
+      
+      if (rInput < 0 || iInput < 0) { setError('Quantities must be ≥ 0'); return }
+      if (totalIssued > opening + totalRestock) { setError(`Total issued for ${row.item_name} cannot exceed opening + total restocked`); return }
       if (closing < 0) { setError(`Closing stock for ${row.item_name} cannot be negative`); return }
-      if (r > 0) {
-        records.push({ entity_type: 'storekeeper', data: { type: 'stock_restock', item_name: row.item_name, quantity: r, date, staff_name: staffName, notes: note || undefined }, financial_amount: 0 })
+      
+      if (rInput > 0) {
+        records.push({ entity_type: 'storekeeper', data: { type: 'stock_restock', item_name: row.item_name, quantity: rInput, date, staff_name: staffName, notes: note || undefined }, financial_amount: 0 })
       }
-      if (i > 0) {
-        records.push({ entity_type: 'storekeeper', data: { type: 'stock_issued', item_name: row.item_name, quantity: i, date, staff_name: staffName, notes: note || undefined }, financial_amount: 0 })
+      if (iInput > 0) {
+        records.push({ entity_type: 'storekeeper', data: { type: 'stock_issued', item_name: row.item_name, quantity: iInput, date, staff_name: staffName, notes: note || undefined }, financial_amount: 0 })
       }
+      
+      // EXPLICIT SOURCE OF TRUTH: Submit the calculated Closing Stock as a hard snapshot
+      // This ensures the Inventory Catalog always reflects exactly what the Storekeeper saw/submitted.
+      records.push({ 
+        entity_type: 'storekeeper', 
+        data: { 
+          type: 'daily_closing_stock', 
+          item_name: row.item_name, 
+          quantity: 0, // Not a movement
+          closing_stock: closing, 
+          date, 
+          staff_name: staffName, 
+          notes: note || undefined 
+        }, 
+        financial_amount: 0 
+      })
     }
-    if (records.length === 0) { setError('Enter restocked or issued quantities for at least one item.'); return }
+    if (records.length === 0) { setError('No changes detected to submit.'); return }
     try {
       setSubmitting(true)
       const ok = await (ensureActiveSession?.() ?? Promise.resolve(true))
       if (!ok) { setError('Session expired. Please sign in again to continue.'); setSubmitting(false); return }
-      const { error: insertError } = await supabase.from('operational_records').insert(records)
-      if (insertError) { setError(insertError.message); return }
-      setSuccess('Storekeeper daily stock submitted for supervisor approval.')
-      // Reset input maps but keep date and selections
-      const rmap: Record<string, number> = {}; const imap: Record<string, number> = {}; const nmap: Record<string, string> = {}
-      for (const it of items) { rmap[it.item_name] = 0; imap[it.item_name] = 0; nmap[it.item_name] = '' }
-      setRestockedMap(rmap); setIssuedMap(imap); setNotesMap(nmap)
+      // Chunk insert to avoid statement timeouts on large submissions
+      const chunkSize = 25
+      for (let i = 0; i < records.length; i += chunkSize) {
+        const batch = records.slice(i, i + chunkSize).map(r => ({ ...r, submitted_by: user?.id ?? null, status: 'pending' }))
+        const { error: insertError } = await supabase
+          .from('operational_records')
+          .insert(batch)
+        if (insertError) { setError(insertError.message); return }
+      }
+      setSuccess('Storekeeper daily stock updated.')
+      
+      // Clear inputs and refresh data
+      setRestockedMap({})
+      setIssuedMap({})
+      setNotesMap({})
+      
+      // Trigger a re-fetch of items to update stock_in_db/stock_out_db
+      // We can do this by toggling a dependency or just calling the effect?
+      // Since fetchItems is inside useEffect, we can't call it directly.
+      // But we can force a refresh by creating a refresh trigger state?
+      // Or just reload the page? No, that's bad UX.
+      // The simplest way is to update `items` locally, but `fetchItems` is better for consistency.
+      // Let's rely on the user refreshing or add a `refreshKey` state.
+      // Actually, since we cleared the maps, the displayed Closing Stock will revert to Opening + PrevRestock - PrevIssued
+      // UNTIL the new data is fetched.
+      // So we MUST fetch new data immediately.
+      // I'll add a refresh trigger to the dependency array.
+      setRefreshKey(prev => prev + 1)
+      
       window.scrollTo({ top: 0, behavior: 'smooth' })
     } finally { setSubmitting(false) }
   }
@@ -707,7 +754,7 @@ export default function StorekeeperStockForm() {
           </div>
           
           <div className="p-0 sm:p-4">
-            {(activeTab === 'daily' ? loadingItems : activeTab === 'monthly' ? loadingMonthly : loadingHistory) ? (
+            {(activeTab === 'daily' ? loadingItems : activeTab === 'monthly' ? loadingMonthly : false) ? (
                <div className="p-12 text-center text-gray-500">
                  <div className="w-8 h-8 border-2 border-green-600 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
                  Loading data...
@@ -794,61 +841,7 @@ export default function StorekeeperStockForm() {
               </>
             ) : (
               // HISTORY TABLE
-              <>
-                <div className="overflow-x-auto border rounded-lg shadow-sm bg-white">
-                  <Table>
-                    <TableHeader className="bg-gray-50">
-                      <TableRow>
-                        <TableHead>Date</TableHead>
-                        <TableHead>Category</TableHead>
-                        <TableHead>Staff</TableHead>
-                        <TableHead>Item</TableHead>
-                        <TableHead className="text-right">Opening</TableHead>
-                        <TableHead className="text-right">Restock</TableHead>
-                        <TableHead className="text-right">Issued</TableHead>
-                        <TableHead className="text-right">Closing</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {paginatedHistory.map((r) => (
-                        <TableRow key={r.id} className="hover:bg-gray-50">
-                          <TableCell className="text-sm text-gray-600 whitespace-nowrap">
-                            {r.date}
-                          </TableCell>
-                          <TableCell className="text-sm text-gray-600">
-                            {r.category || '—'}
-                          </TableCell>
-                          <TableCell className="text-sm text-gray-500">
-                            {r.staff_name || '—'}
-                          </TableCell>
-                          <TableCell className="font-medium text-gray-900">
-                            {r.item_name}
-                          </TableCell>
-                          <TableCell className="text-right">{r.opening_stock}</TableCell>
-                          <TableCell className="text-right text-green-600">{r.quantity_in > 0 ? `+${r.quantity_in}` : '-'}</TableCell>
-                          <TableCell className="text-right text-red-600">{r.quantity_out > 0 ? `-${r.quantity_out}` : '-'}</TableCell>
-                          <TableCell className="text-right font-medium">{r.closing_stock}</TableCell>
-                        </TableRow>
-                      ))}
-                      {paginatedHistory.length === 0 && (
-                         <TableRow>
-                           <TableCell colSpan={7} className="text-center py-8 text-gray-500">
-                             No history records found.
-                           </TableCell>
-                         </TableRow>
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
-                
-                <div className="mt-4 flex justify-center pb-4">
-                  <Pagination
-                    currentPage={page}
-                    totalPages={Math.ceil(filteredHistory.length / PAGE_SIZE)}
-                    onPageChange={setPage}
-                  />
-                </div>
-              </>
+              <InventoryHistoryModule role="storekeeper" />
             )}
           </div>
 

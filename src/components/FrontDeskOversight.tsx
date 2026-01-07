@@ -7,6 +7,10 @@ import FrontDeskHistory from './FrontDeskHistory';
 import FrontDeskAnalyticsView from './FrontDeskAnalyticsView';
 import AuditLog from './AuditLog';
 import HousekeepingTab from './HousekeepingTab.tsx';
+import ReservationList from './ReservationList';
+import FrontDeskForm from './FrontDeskForm';
+import InterruptedStaysTab from './InterruptedStaysTab';
+import ResumeInterruptedStay from './ResumeInterruptedStay';
 import { Button } from './ui/Button';
 import { 
   IconLayout, 
@@ -15,11 +19,14 @@ import {
   IconRefresh, 
   IconBarChart,
   IconShield,
-  IconBroom
+  IconBroom,
+  IconCalendar,
+  IconUserCheck,
+  IconAlertCircle
 } from './ui/Icons';
 
 type FrontDeskOversightRole = 'supervisor' | 'manager' | 'admin';
-type Tab = 'dashboard' | 'guests' | 'history' | 'analytics' | 'audit' | 'housekeeping';
+type Tab = 'dashboard' | 'guests' | 'history' | 'analytics' | 'audit' | 'housekeeping' | 'reservations' | 'checkin' | 'interrupted';
 
 interface FrontDeskOversightProps {
   role: FrontDeskOversightRole;
@@ -28,9 +35,15 @@ interface FrontDeskOversightProps {
 export default function FrontDeskOversight({ role }: FrontDeskOversightProps) {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const { rooms, activeBookings, pastBookings, checkoutRecords, loading, refresh } = useFrontDesk();
+  const [showResumeModal, setShowResumeModal] = useState(false);
 
   const canViewAnalytics = role === 'manager' || role === 'admin';
   const canViewAudit = role === 'admin';
+
+  const handleCheckInSuccess = () => {
+    refresh();
+    setActiveTab('dashboard');
+  };
 
   return (
     <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
@@ -39,7 +52,7 @@ export default function FrontDeskOversight({ role }: FrontDeskOversightProps) {
         <div>
           <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Front Desk Oversight</h1>
           <p className="text-gray-500">
-            {role === 'supervisor' && 'Supervisor View (Read-Only)'}
+            {role === 'supervisor' && 'Supervisor View'}
             {role === 'manager' && 'Manager View (Analytics & Oversight)'}
             {role === 'admin' && 'Admin View (Full Oversight & Audit)'}
           </p>
@@ -48,6 +61,10 @@ export default function FrontDeskOversight({ role }: FrontDeskOversightProps) {
           <Button variant="outline" onClick={refresh} disabled={loading} className="gap-2">
             <IconRefresh className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh Data
+          </Button>
+          <Button onClick={() => setActiveTab('checkin')} className="bg-green-600 hover:bg-green-700 text-white shadow-sm">
+            <IconUserCheck className="w-4 h-4 mr-2" />
+            New Check-In
           </Button>
         </div>
       </div>
@@ -79,6 +96,17 @@ export default function FrontDeskOversight({ role }: FrontDeskOversightProps) {
             <span className="bg-gray-100 text-gray-600 py-0.5 px-2 rounded-full text-xs">
               {activeBookings.length}
             </span>
+          </button>
+          <button
+            onClick={() => setActiveTab('reservations')}
+            className={`pb-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
+              activeTab === 'reservations'
+                ? 'border-green-600 text-green-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <IconCalendar className="w-5 h-5" />
+            Reservations
           </button>
           <button
             onClick={() => setActiveTab('history')}
@@ -120,6 +148,17 @@ export default function FrontDeskOversight({ role }: FrontDeskOversightProps) {
             </button>
           )}
           <button
+            onClick={() => setActiveTab('checkin')}
+            className={`pb-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
+              activeTab === 'checkin'
+                ? 'border-green-600 text-green-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <IconUserCheck className="w-5 h-5" />
+            Check In
+          </button>
+          <button
             onClick={() => setActiveTab('housekeeping')}
             className={`pb-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
               activeTab === 'housekeeping'
@@ -129,6 +168,17 @@ export default function FrontDeskOversight({ role }: FrontDeskOversightProps) {
           >
             <IconBroom className="w-5 h-5" />
             Housekeeping
+          </button>
+          <button
+            onClick={() => setActiveTab('interrupted')}
+            className={`pb-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
+              activeTab === 'interrupted'
+                ? 'border-green-600 text-green-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <IconAlertCircle className="w-5 h-5" />
+            Interrupted Stays
           </button>
         </nav>
       </div>
@@ -153,15 +203,23 @@ export default function FrontDeskOversight({ role }: FrontDeskOversightProps) {
                   View All Guests
                 </Button>
               </div>
-              <ActiveGuestList bookings={activeBookings.slice(0, 5)} loading={loading} onRefresh={refresh} readOnly={true} />
+              <ActiveGuestList bookings={activeBookings.slice(0, 5)} rooms={rooms} loading={loading} onRefresh={refresh} />
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-bold text-gray-900">Resume Interrupted Stay</h2>
+                <Button variant="outline" onClick={() => setShowResumeModal(true)}>Open</Button>
+              </div>
+              <p className="text-sm text-gray-600">Search guests with interrupted credits and resume their stay in the same or a new room.</p>
             </div>
           </div>
         )}
 
         {activeTab === 'guests' && (
           <div className="space-y-6">
-            <h2 className="text-xl font-bold text-gray-900">Guest Management (Read-Only)</h2>
-            <ActiveGuestList bookings={activeBookings} loading={loading} onRefresh={refresh} readOnly={true} />
+            <h2 className="text-xl font-bold text-gray-900">Guest Management</h2>
+            <ActiveGuestList bookings={activeBookings} rooms={rooms} loading={loading} onRefresh={refresh} />
           </div>
         )}
 
@@ -169,6 +227,18 @@ export default function FrontDeskOversight({ role }: FrontDeskOversightProps) {
           <div className="space-y-6">
             <h2 className="text-xl font-bold text-gray-900">Check-Out History</h2>
             <FrontDeskHistory bookings={pastBookings} loading={loading} />
+          </div>
+        )}
+
+        {activeTab === 'reservations' && (
+          <div className="max-w-6xl mx-auto">
+             <ReservationList />
+          </div>
+        )}
+
+        {activeTab === 'checkin' && (
+          <div className="max-w-4xl mx-auto">
+            <FrontDeskForm onSuccess={handleCheckInSuccess} />
           </div>
         )}
 
@@ -193,6 +263,23 @@ export default function FrontDeskOversight({ role }: FrontDeskOversightProps) {
             <HousekeepingTab onSubmitted={refresh} />
           </div>
         )}
+
+        {activeTab === 'interrupted' && (
+          <div className="space-y-6">
+            <h2 className="text-xl font-bold text-gray-900">Interrupted Stays / Pending Resumption</h2>
+            <InterruptedStaysTab rooms={rooms} onRefresh={refresh} />
+          </div>
+        )}
+
+        <ResumeInterruptedStay
+          isOpen={showResumeModal}
+          onClose={() => setShowResumeModal(false)}
+          rooms={rooms}
+          onSuccess={() => {
+            setShowResumeModal(false);
+            refresh();
+          }}
+        />
       </div>
     </div>
   );

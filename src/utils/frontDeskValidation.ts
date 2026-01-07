@@ -128,7 +128,7 @@ export function validateFrontDeskData(data: FrontDeskRecordData): ValidationResu
   }
 
   // Common Meta check
-  if (isNaN(parseDate(data.meta.created_at_local).getTime())) {
+  if (data.meta && isNaN(parseDate(data.meta.created_at_local).getTime())) {
     errors.push('created_at_local must be a valid ISO datetime string.');
   }
 

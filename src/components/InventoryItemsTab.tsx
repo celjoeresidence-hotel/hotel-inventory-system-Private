@@ -51,8 +51,9 @@ interface ItemRow {
 }
 
 export default function InventoryItemsTab() {
-  const { session, isConfigured, isSupervisor, isManager, isAdmin } = useAuth();
+  const { session, isConfigured, isSupervisor, isManager, isAdmin, role } = useAuth();
   const canView = useMemo(() => Boolean(isConfigured && session && (isSupervisor || isManager || isAdmin)), [isConfigured, session, isSupervisor, isManager, isAdmin]);
+  const canEdit = useMemo(() => Boolean(isSupervisor || isManager || isAdmin || role === 'storekeeper'), [isSupervisor, isManager, isAdmin, role]);
   const canDeleteItem = useMemo(() => Boolean(isManager || isAdmin), [isManager, isAdmin]);
 
   const [error, setError] = useState<string | null>(null);
@@ -295,28 +296,31 @@ export default function InventoryItemsTab() {
           opening_stock: null,
           last_adjusted: null,
         })).filter((it) => it.item_name);
-        const results: ItemRow[] = [];
-        for (const it of baseItems) {
-          const { data: osData, error: osErr } = await supabase
-            .from('operational_records')
-            .select('id, data, status, created_at')
-            .eq('status', 'approved')
-            .eq('entity_type', 'storekeeper')
-            .filter('data->>type', 'eq', 'opening_stock')
-            .filter('data->>item_name', 'eq', it.item_name)
-            .order('created_at', { ascending: false })
-            .limit(1);
-          if (!osErr && osData && osData.length > 0) {
-            const row = osData[0];
-            results.push({
-              ...it,
-              opening_stock: typeof row?.data?.quantity === 'number' ? row.data.quantity : Number(row?.data?.quantity ?? 0),
-              last_adjusted: row?.data?.date ?? row?.created_at ?? null,
-            });
-          } else {
-            results.push(it);
-          }
+
+        // Fetch current stock from authoritative view
+        let stockMap = new Map<string, number>();
+        try {
+            const { data: stockData, error: stockErr } = await supabase
+                .from('inventory_catalog_view')
+                .select('item_name, current_stock')
+                .eq('category', filterCategoryName)
+                .eq('collection_name', filterCollection);
+
+            if (!stockErr && stockData) {
+                for (const r of (stockData as any[])) {
+                    stockMap.set(r.item_name, Number(r.current_stock ?? 0));
+                }
+            }
+        } catch (err) {
+            console.error('Failed to fetch stock levels', err);
         }
+
+        const results: ItemRow[] = baseItems.map(it => ({
+            ...it,
+            opening_stock: stockMap.get(it.item_name) ?? 0,
+            last_adjusted: null
+        }));
+
         setItems(results);
       } finally {
         setLoadingItems(false);
@@ -328,6 +332,7 @@ export default function InventoryItemsTab() {
   useEffect(() => { setPage(1); }, [searchTerm, filterCategoryName, filterCollection]);
 
   async function handleAddItem() {
+    if (!canEdit) return;
     if (!addItemName.trim() || !filterCategoryName || !filterCollection) return;
     setSavingItem(true);
     const itemPayload = {
@@ -405,6 +410,7 @@ export default function InventoryItemsTab() {
   }
 
   async function handleAdjustStock() {
+    if (!canEdit) return;
     if (!adjustItem) return;
     try {
       if (!supabase) { setError('Supabase is not configured.'); return; }
@@ -433,6 +439,7 @@ export default function InventoryItemsTab() {
   }
 
   async function handleUpdateItem() {
+    if (!canEdit) return;
     if (!editItemTarget || !editItemName.trim()) return;
     setEditItemSaving(true);
     try {
@@ -565,7 +572,7 @@ export default function InventoryItemsTab() {
                             <TableHead className="sticky left-10 z-20 bg-gray-50 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">Item Name</TableHead>
                             <TableHead>Unit</TableHead>
                             <TableHead className="text-right">Price</TableHead>
-                            <TableHead className="text-right">Opening Stock</TableHead>
+                            <TableHead className="text-right">Current Stock</TableHead>
                             <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
                     </TableHeader>
@@ -620,6 +627,7 @@ export default function InventoryItemsTab() {
                                             )}
                                         </div>
                                     </TableCell>
+                                    {canEdit && (
                                     <TableCell className="text-right">
                                         <div className="flex justify-end gap-2">
                                             <Button 
@@ -654,6 +662,7 @@ export default function InventoryItemsTab() {
                                             </Button>
                                         </div>
                                     </TableCell>
+                                    )}
                                 </TableRow>
                             ))
                         )}

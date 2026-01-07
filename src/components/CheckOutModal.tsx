@@ -2,18 +2,25 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 import { Button } from './ui/Button';
+import { differenceInCalendarDays, format } from 'date-fns';
 import { IconAlertCircle } from './ui/Icons';
 import type { BookingWithId } from '../hooks/useFrontDesk';
 import type { PaymentMethod } from '../types/frontDesk';
+
+import { normalizeLedger, calculateLedgerSummary } from '../utils/ledgerUtils';
+import type { LedgerEntry, LedgerSummary } from '../types/frontDesk';
+
+import type { RoomStatus } from '../types/frontDesk';
 
 interface CheckOutModalProps {
   isOpen: boolean;
   onClose: () => void;
   booking: BookingWithId | null;
+  roomStatus?: RoomStatus;
   onSuccess: () => void;
 }
 
-export default function CheckOutModal({ isOpen, onClose, booking, onSuccess }: CheckOutModalProps) {
+export default function CheckOutModal({ isOpen, onClose, booking, roomStatus, onSuccess }: CheckOutModalProps) {
   const { staffId, ensureActiveSession } = useAuth();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,13 +28,19 @@ export default function CheckOutModal({ isOpen, onClose, booking, onSuccess }: C
   // Payment State
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('transfer');
   const [notes, setNotes] = useState('');
+  const [checkoutType, setCheckoutType] = useState<'standard' | 'interrupted'>('standard');
   
   // Real-time Balance State
-  const [realTimeBalance, setRealTimeBalance] = useState<{totalDue: number, alreadyPaid: number, balance: number, penalties: number, discounts: number} | null>(null);
+  const [ledgerSummary, setLedgerSummary] = useState<LedgerSummary | null>(null);
+  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
+  const [showLedger, setShowLedger] = useState(false);
 
   useEffect(() => {
     if (isOpen && booking) {
         fetchRealTimeBalance();
+        setCheckoutType('standard');
+        setNotes('');
+        setShowLedger(false);
     }
   }, [isOpen, booking]);
 
@@ -44,29 +57,14 @@ export default function CheckOutModal({ isOpen, onClose, booking, onSuccess }: C
           return;
       }
 
-      let roomCost = booking.data.pricing?.total_room_cost || 0;
-      let penalties = 0;
-      let payments = booking.data.payment?.paid_amount || 0; // Initial payment
-      let discounts = booking.data.pricing?.discount_amount || 0;
-
-      data.forEach(rec => {
-        const d = rec.data;
-        if (d.type === 'penalty_fee') penalties += Number(d.amount || 0);
-        if (d.type === 'payment_record') payments += Number(d.amount || 0);
-        if (d.type === 'discount_applied') discounts += Number(d.amount || 0);
-        // If there are previous partial checkouts or corrections, handle them?
-        // For now assuming simple additive model.
-      });
-
-      const totalDue = roomCost + penalties - discounts;
-      const balance = totalDue - payments;
+      const entries = normalizeLedger(booking, data);
+      const summary = calculateLedgerSummary(entries);
       
-      setRealTimeBalance({ totalDue, alreadyPaid: payments, balance, penalties, discounts });
+      setLedgerEntries(entries);
+      setLedgerSummary(summary);
   };
 
-  const calculations = realTimeBalance; // Use real-time instead of memoized prop
-
-  if (!booking || !calculations) return null;
+  if (!booking || !ledgerSummary) return null;
 
   const handleConfirmCheckout = async () => {
     // Enforce 0 balance (unless paying the rest now)
@@ -77,6 +75,12 @@ export default function CheckOutModal({ isOpen, onClose, booking, onSuccess }: C
     setLoading(true);
     setError(null);
 
+    if (roomStatus && roomStatus.housekeeping_status !== 'clean') {
+        setError(`Checkout blocked: Room is marked as ${roomStatus.housekeeping_status}. It must be cleaned first.`);
+        setLoading(false);
+        return;
+    }
+
     try {
       // Create Checkout Record
       const checkoutPayload = {
@@ -85,14 +89,15 @@ export default function CheckOutModal({ isOpen, onClose, booking, onSuccess }: C
         front_desk_staff_id: staffId,
         checkout: {
           checkout_date: new Date().toISOString(),
-          total_due: calculations.totalDue,
-          final_payment: calculations.balance, // PAYING THE FULL BALANCE
+          checkout_type: checkoutType,
+          total_due: ledgerSummary.totalCharges,
+          final_payment: ledgerSummary.balance, // Default: PAY FULL BALANCE
           payment_method: paymentMethod,
           notes: notes
         },
         meta: {
           created_at_local: new Date().toISOString(),
-          notes: `Checked out by staff ${staffId}`
+          notes: `Checked out by staff ${staffId} (${checkoutType})`
         }
       };
 
@@ -106,7 +111,7 @@ export default function CheckOutModal({ isOpen, onClose, booking, onSuccess }: C
         .insert({
           entity_type: 'front_desk',
           data: checkoutPayload,
-          financial_amount: Math.max(0, calculations.balance), // Ensure non-negative to satisfy DB constraint
+          financial_amount: Math.max(0, ledgerSummary.balance), // Ensure non-negative to satisfy DB constraint
           submitted_by: staffId, 
           status: 'approved' // Migration 0013 allows this
         });
@@ -114,12 +119,12 @@ export default function CheckOutModal({ isOpen, onClose, booking, onSuccess }: C
       if (insertError) throw insertError;
 
       // 2. Also insert a "Payment Record" if balance > 0 (to close the books)
-      if (calculations.balance > 0) {
+      if (ledgerSummary.balance > 0) {
         const paymentPayload = {
           type: 'payment_record',
           booking_id: booking.id,
           front_desk_staff_id: staffId,
-          amount: calculations.balance,
+          amount: ledgerSummary.balance,
           payment_method: paymentMethod,
           reason: 'Final Settlement at Checkout',
           meta: { created_at_local: new Date().toISOString() }
@@ -130,22 +135,58 @@ export default function CheckOutModal({ isOpen, onClose, booking, onSuccess }: C
         });
       }
 
-      // 3. Mark Booking as 'checked_out' (Optional, if you want to update the source record status)
+      // 3. Mark Booking as 'checked_out' or 'interrupted'
       await supabase!.from('operational_records').update({
-        status: 'approved' // Or keep approved, maybe add a 'checked_out' flag inside data?
+         status: 'archived',
+         data: { ...booking.data, stay: { ...booking.data.stay, status: checkoutType === 'interrupted' ? 'interrupted' : 'checked_out' } }
       }).eq('id', booking.id);
-      
-      // Update the booking data to status: 'checked_out'
-      // This requires reading the current data, modifying it, and updating.
-      // But since 'operational_records' is append-heavy, maybe we just rely on the checkout_record.
-      // However, to remove it from "Active Guests", we might want to update the status column or data.status.
-      
-      // Let's update the status column of the BOOKING record to 'completed' or 'checked_out'
-      await supabase!.from('operational_records').update({
-         status: 'archived' // 'archived' or 'completed' to hide from Active list?
-         // The ActiveGuestList filters by data->status != 'checked_out' usually.
-         // Let's update the JSON data too.
-      }).eq('id', booking.id);
+
+      // 4. Interrupted Stay handling: end occupancy segment and create credit
+      if (checkoutType === 'interrupted') {
+        const todayStr = format(new Date(), 'yyyy-MM-dd');
+        const checkIn = booking.data.stay?.check_in ? new Date(booking.data.stay.check_in) : new Date();
+        const usedDays = Math.max(0, differenceInCalendarDays(new Date(), checkIn));
+        const roomRate = Number(booking.data.pricing?.room_rate || 0);
+        const usedCost = roomRate * usedDays;
+        const totalPaid = Number(ledgerSummary.totalPayments || 0);
+        const creditRemaining = Math.max(0, totalPaid - usedCost);
+
+        // 4a. Append stay_interruption record (segment end)
+        await supabase!.from('operational_records').insert({
+          entity_type: 'front_desk',
+          data: {
+            type: 'stay_interruption',
+            booking_id: booking.id,
+            interruption_date: todayStr,
+            reason: notes || 'Emergency / Interrupted Stay'
+          },
+          financial_amount: 0,
+          submitted_by: staffId,
+          status: 'approved'
+        });
+
+        // 4b. Append interrupted_stay_credit record
+        await supabase!.from('operational_records').insert({
+          entity_type: 'front_desk',
+          data: {
+            type: 'interrupted_stay_credit',
+            guest_id: booking.data.guest?.id_reference || null,
+            guest_name: booking.data.guest?.full_name || 'Unknown Guest',
+            department: 'frontdesk',
+            room_number: booking.room_number,
+            room_name: null,
+            days_used: usedDays,
+            total_paid: totalPaid,
+            credit_remaining: creditRemaining,
+            interrupted_at: new Date().toISOString(),
+            can_resume: true,
+            booking_id: booking.id
+          },
+          financial_amount: 0,
+          submitted_by: staffId,
+          status: 'approved'
+        });
+      }
 
       onSuccess();
       onClose();
@@ -171,38 +212,47 @@ export default function CheckOutModal({ isOpen, onClose, booking, onSuccess }: C
           {/* Financial Summary */}
           <div className="bg-gray-50 rounded-lg p-4 space-y-3">
             <div className="flex justify-between text-sm text-gray-600">
-              <span>Total Room Cost</span>
-              <span>₦{booking.data.pricing?.total_room_cost?.toLocaleString()}</span>
+              <span>Total Charges</span>
+              <span>₦{ledgerSummary.totalCharges.toLocaleString()}</span>
             </div>
-            {calculations.penalties > 0 && (
-                 <div className="flex justify-between text-sm text-red-600">
-                  <span>Penalties/Fines</span>
-                  <span>+ ₦{calculations.penalties.toLocaleString()}</span>
-                </div>
-            )}
-            {calculations.discounts > 0 && (
-                 <div className="flex justify-between text-sm text-green-600">
-                  <span>Discounts</span>
-                  <span>- ₦{calculations.discounts.toLocaleString()}</span>
-                </div>
-            )}
             <div className="flex justify-between text-sm text-green-600">
-              <span>Already Paid</span>
-              <span>- ₦{calculations.alreadyPaid.toLocaleString()}</span>
+              <span>Total Payments</span>
+              <span>- ₦{ledgerSummary.totalPayments.toLocaleString()}</span>
             </div>
-            <div className="border-t border-gray-200 pt-3 flex justify-between items-center">
-              <span className="font-semibold text-gray-900">Outstanding Balance</span>
-              <span className={`text-lg font-bold ${calculations.balance > 0 ? 'text-blue-600' : 'text-gray-900'}`}>
-                ₦{calculations.balance.toLocaleString()}
+            
+            <div className="pt-2 border-t border-gray-200 flex justify-between items-center font-bold text-lg">
+              <span>Balance Due</span>
+              <span className={ledgerSummary.balance > 0 ? 'text-red-600' : 'text-gray-900'}>
+                ₦{ledgerSummary.balance.toLocaleString()}
               </span>
             </div>
-          </div>
 
+             <button 
+                type="button" 
+                onClick={() => setShowLedger(!showLedger)}
+                className="text-xs text-indigo-600 hover:text-indigo-800 underline w-full text-left mt-2"
+             >
+                {showLedger ? 'Hide Details' : 'Show Transaction History'}
+             </button>
+
+             {showLedger && (
+                <div className="mt-2 space-y-2 text-xs border-t border-gray-200 pt-2 max-h-40 overflow-y-auto">
+                    {ledgerEntries.map((entry) => (
+                        <div key={entry.id} className="flex justify-between">
+                            <span className="text-gray-500">{new Date(entry.date).toLocaleDateString()} - {entry.description}</span>
+                            <span className={entry.type === 'credit' ? 'text-green-600' : 'text-gray-700'}>
+                                {entry.type === 'credit' ? '-' : ''}₦{entry.amount.toLocaleString()}
+                            </span>
+                        </div>
+                    ))}
+                </div>
+             )}
+          </div>
           {/* Payment Method */}
-          {calculations.balance > 0 ? (
+          {ledgerSummary.balance > 0 ? (
             <div className="space-y-3">
               <label className="block text-sm font-medium text-gray-700">
-                Payment Method for Balance (₦{calculations.balance.toLocaleString()})
+                Payment Method for Balance (₦{ledgerSummary.balance.toLocaleString()})
               </label>
               <div className="grid grid-cols-3 gap-3">
                 {(['transfer', 'POS', 'cash'] as PaymentMethod[]).map((method) => (
@@ -240,6 +290,47 @@ export default function CheckOutModal({ isOpen, onClose, booking, onSuccess }: C
             />
           </div>
 
+          {/* Checkout Type & Verification */}
+          <div className="bg-orange-50 p-4 rounded-lg border border-orange-100 space-y-4">
+             <div>
+                <label className="block text-sm font-medium text-orange-900 mb-2">Checkout Type</label>
+                <div className="flex gap-4">
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input 
+                            type="radio" 
+                            name="checkoutType" 
+                            value="standard" 
+                            checked={checkoutType === 'standard'}
+                            onChange={() => setCheckoutType('standard')}
+                            className="text-orange-600 focus:ring-orange-500"
+                        />
+                        Standard Checkout
+                    </label>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input 
+                            type="radio" 
+                            name="checkoutType" 
+                            value="interrupted" 
+                            checked={checkoutType === 'interrupted'}
+                            onChange={() => setCheckoutType('interrupted')}
+                            className="text-orange-600 focus:ring-orange-500"
+                        />
+                        Interrupted (Emergency)
+                    </label>
+                </div>
+             </div>
+             
+             {roomStatus && roomStatus.housekeeping_status !== 'clean' && (
+               <div className="p-3 bg-red-50 text-red-700 rounded-lg text-sm flex items-center gap-2">
+                 <IconAlertCircle className="w-5 h-5" />
+                 <div>
+                   <span className="font-bold">Checkout Blocked</span>
+                   <p className="text-xs">Housekeeping status: {roomStatus.housekeeping_status}</p>
+                 </div>
+               </div>
+             )}
+          </div>
+
           {error && (
             <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg flex items-start gap-2">
               <IconAlertCircle className="w-5 h-5 flex-shrink-0" />
@@ -263,7 +354,7 @@ export default function CheckOutModal({ isOpen, onClose, booking, onSuccess }: C
             isLoading={loading}
             disabled={loading} // We allow checkout if they pay the balance now.
           >
-            {calculations.balance > 0 ? `Pay & Checkout` : 'Confirm Checkout'}
+            {ledgerSummary.balance > 0 ? `Pay & Checkout` : 'Confirm Checkout'}
           </Button>
         </div>
       </div>

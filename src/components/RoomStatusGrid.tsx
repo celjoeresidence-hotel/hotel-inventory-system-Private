@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { RoomStatus } from '../types/frontDesk';
-import { IconSearch } from './ui/Icons';
+import { IconSearch, IconBroom, IconCalendar, IconUser, IconAlertCircle } from './ui/Icons';
 
 interface RoomStatusGridProps {
   rooms: RoomStatus[];
@@ -26,6 +26,35 @@ export default function RoomStatusGrid({ rooms, loading }: RoomStatusGridProps) 
     cleaning: rooms.filter(r => r.status === 'cleaning').length,
     maintenance: rooms.filter(r => r.status === 'maintenance').length,
     pending: rooms.filter(r => r.status === 'pending').length,
+  };
+
+  const getStatusBadgeStyles = (status: string) => {
+    switch (status) {
+      case 'available': return 'bg-green-100 text-green-700 border-green-200';
+      case 'occupied': return 'bg-red-100 text-red-700 border-red-200';
+      case 'reserved': return 'bg-orange-100 text-orange-700 border-orange-200';
+      case 'cleaning': return 'bg-blue-100 text-blue-700 border-blue-200';
+      case 'maintenance': return 'bg-purple-100 text-purple-700 border-purple-200';
+      default: return 'bg-gray-100 text-gray-700 border-gray-200';
+    }
+  };
+
+  const getHKStatusStyles = (status: string) => {
+    switch (status) {
+      case 'clean': return 'text-green-600 bg-green-50 border-green-100';
+      case 'dirty': return 'text-red-600 bg-red-50 border-red-100';
+      case 'not_reported': return 'text-gray-500 bg-gray-50 border-gray-100';
+      default: return 'text-gray-400';
+    }
+  };
+
+  const formatHKStatus = (status: string) => {
+    switch (status) {
+      case 'clean': return 'Clean';
+      case 'dirty': return 'Dirty';
+      case 'not_reported': return 'Not Reported';
+      default: return status;
+    }
   };
 
   if (loading) return <div className="p-8 text-center text-gray-500">Loading rooms...</div>;
@@ -92,59 +121,117 @@ export default function RoomStatusGrid({ rooms, loading }: RoomStatusGridProps) 
       </div>
 
       {/* Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {filtered.map((room) => (
           <div 
             key={room.id}
             className={`
-              relative p-4 rounded-xl border-2 transition-all hover:shadow-md cursor-default group
-              ${room.status === 'available' ? 'border-green-100 bg-green-50/30' : ''}
-              ${room.status === 'occupied' ? 'border-red-100 bg-red-50/30' : ''}
-              ${room.status === 'reserved' ? 'border-orange-100 bg-orange-50/30' : ''}
-              ${room.status === 'cleaning' ? 'border-blue-100 bg-blue-50/30' : ''}
-              ${room.status === 'maintenance' ? 'border-purple-100 bg-purple-50/30' : ''}
-              ${room.status === 'pending' ? 'border-gray-100 bg-gray-50/30' : ''}
+              relative p-4 rounded-xl border-2 transition-all hover:shadow-md cursor-default flex flex-col justify-between h-full bg-white
+              ${room.status === 'available' ? 'border-green-100' : ''}
+              ${room.status === 'occupied' ? 'border-red-100' : ''}
+              ${room.status === 'reserved' ? 'border-orange-100' : ''}
+              ${room.status === 'cleaning' ? 'border-blue-100' : ''}
+              ${room.status === 'maintenance' ? 'border-purple-100' : ''}
+              ${room.status === 'pending' ? 'border-gray-100' : ''}
             `}
           >
+            {/* Header: Number & Status */}
             <div className="flex justify-between items-start mb-2">
-              <span className={`text-2xl font-bold ${
-                room.status === 'available' ? 'text-green-700' : 
-                room.status === 'occupied' ? 'text-red-700' : 
-                room.status === 'reserved' ? 'text-orange-700' : 'text-gray-700'
-              }`}>
-                {room.room_number}
-              </span>
-              <div className={`w-3 h-3 rounded-full ${
-                room.status === 'available' ? 'bg-green-500' : 
-                room.status === 'occupied' ? 'bg-red-500' : 
-                room.status === 'reserved' ? 'bg-orange-500' :
-                room.status === 'cleaning' ? 'bg-blue-500' :
-                room.status === 'maintenance' ? 'bg-purple-500' :
-                room.status === 'pending' ? 'bg-gray-500' : 'bg-gray-400'
-              }`} />
-            </div>
-            
-            <div className="text-xs text-gray-500 font-medium uppercase tracking-wider mb-4">
-              {room.status}
+              <div>
+                <span className="text-2xl font-bold text-gray-900">
+                  {room.room_number}
+                </span>
+                <div className="text-xs text-gray-500 font-medium">{room.room_name}</div>
+              </div>
+              <div className={`px-2 py-1 rounded text-xs font-bold uppercase tracking-wider border ${getStatusBadgeStyles(room.status)}`}>
+                {room.status === 'maintenance' ? 'Out of Service' : room.status}
+              </div>
             </div>
 
-            <div className="space-y-1">
-              <div className="text-sm font-medium text-gray-900 truncate">
-                {(room.status === 'occupied' || room.status === 'reserved') ? room.current_guest : room.room_type}
+            {/* Body: Details */}
+            <div className="space-y-3 mt-2 flex-grow">
+              {/* Type */}
+              <div className="text-sm text-gray-600 flex items-center gap-2">
+                 <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded text-xs">{room.room_type}</span>
               </div>
-              <div className="text-xs text-gray-500">
-                {room.status === 'occupied' && room.check_out_date ? 
-                  `Out: ${room.check_out_date}` : 
-                 room.status === 'reserved' && room.check_out_date ?
-                  `Until: ${room.check_out_date}` :
-                  `₦${room.price_per_night.toLocaleString()}`
-                }
+
+              {/* Occupied Details */}
+              {room.status === 'occupied' && (
+                <div className="bg-red-50 p-2 rounded text-sm text-red-900 space-y-1">
+                  <div className="flex items-center gap-2 font-medium">
+                    <IconUser className="w-3 h-3" />
+                    {room.current_guest}
+                  </div>
+                  {room.check_out_date && (
+                    <div className="text-xs text-red-700 pl-5">
+                      Check-out: {room.check_out_date}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Reserved Details */}
+              {room.status === 'reserved' && (
+                <div className="bg-orange-50 p-2 rounded text-sm text-orange-900 space-y-1">
+                  <div className="flex items-center gap-2 font-medium">
+                     <IconCalendar className="w-3 h-3" />
+                     {room.current_guest}
+                  </div>
+                   {room.check_out_date && (
+                    <div className="text-xs text-orange-700 pl-5">
+                      Reserved until: {room.check_out_date}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Upcoming Reservation (if not already reserved status, or in addition) */}
+              {room.upcoming_reservation && room.status !== 'reserved' && (
+                <div className="bg-blue-50 p-2 rounded text-sm text-blue-900 space-y-1">
+                  <div className="flex items-center gap-2 font-medium">
+                    <IconCalendar className="w-3 h-3" />
+                    Upcoming: {room.upcoming_reservation.guest_name}
+                  </div>
+                  <div className="text-xs text-blue-700 pl-5">
+                    Check-in: {room.upcoming_reservation.check_in}
+                  </div>
+                </div>
+              )}
+
+              {/* Interrupted / Pending Resumption Indicators */}
+              {(room.interrupted || room.pending_resumption) && (
+                <div className="flex gap-2 mt-1">
+                  {room.interrupted && (
+                    <span className="inline-block text-[10px] px-2 py-0.5 rounded bg-yellow-50 text-yellow-700 border border-yellow-200">
+                      Interrupted
+                    </span>
+                  )}
+                  {room.pending_resumption && (
+                    <span className="inline-block text-[10px] px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
+                      Pending Resumption
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Footer: Housekeeping */}
+            <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                <IconBroom className="w-3 h-3" />
+                <span>Housekeeping:</span>
               </div>
+              <span className={`text-xs font-medium px-2 py-0.5 rounded border ${getHKStatusStyles(room.housekeeping_status)}`}>
+                {formatHKStatus(room.housekeeping_status)}
+              </span>
             </div>
             
-            {/* Tooltip for Reserved/Occupied */}
-            {(room.status === 'reserved' || room.status === 'occupied') && (
-                <div className="absolute inset-0 bg-transparent" title={`${room.status === 'reserved' ? 'Reserved' : 'Occupied'} by ${room.current_guest}\nUntil: ${room.check_out_date}`}></div>
+            {/* Blocking Warning (Visual only here, logic in ActiveGuestList) */}
+            {room.status === 'occupied' && room.housekeeping_status !== 'clean' && (
+               <div className="mt-2 text-[10px] text-red-500 flex items-center gap-1 justify-end">
+                  <IconAlertCircle className="w-3 h-3" />
+                  Checkout Blocked
+               </div>
             )}
           </div>
         ))}

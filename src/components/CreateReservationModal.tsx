@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 import { Modal } from './ui/Modal';
@@ -31,11 +31,23 @@ export default function CreateReservationModal({ isOpen, onClose, onSuccess }: C
   const [roomId, setRoomId] = useState('');
   const [checkIn, setCheckIn] = useState('');
   const [checkOut, setCheckOut] = useState('');
+  const [startTime, setStartTime] = useState('14:00');
+  const [endTime, setEndTime] = useState('11:00');
   const [deposit, setDeposit] = useState('');
   const [notes, setNotes] = useState('');
   
   const [rooms, setRooms] = useState<any[]>([]);
   const [checkingConflict, setCheckingConflict] = useState(false);
+  const nights = useMemo(() => {
+    if (!checkIn || !checkOut) return 0;
+    const start = new Date(checkIn).getTime();
+    const end = new Date(checkOut).getTime();
+    const diffDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+    return Math.max(0, diffDays);
+  }, [checkIn, checkOut]);
+  const selectedRoom = useMemo(() => rooms.find(r => r.id === roomId), [rooms, roomId]);
+  const pricePerNight = Number(selectedRoom?.price_per_night || 0);
+  const totalRoomCost = pricePerNight * nights;
 
   useEffect(() => {
     if (isOpen) {
@@ -84,7 +96,9 @@ export default function CreateReservationModal({ isOpen, onClose, onSuccess }: C
         supabase, 
         roomId, 
         checkIn, 
-        checkOut
+        checkOut,
+        startTime,
+        endTime
       );
       setCheckingConflict(false);
 
@@ -93,8 +107,8 @@ export default function CreateReservationModal({ isOpen, onClose, onSuccess }: C
       }
 
       // 3. Prepare Data
-      const selectedRoom = rooms.find(r => r.id === roomId);
-      if (!selectedRoom) throw new Error('Invalid room selected');
+      const selectedRoomLocal = rooms.find(r => r.id === roomId);
+      if (!selectedRoomLocal) throw new Error('Invalid room selected');
 
       const status = determineInitialStatus(checkIn, role || 'frontdesk');
       
@@ -109,11 +123,13 @@ export default function CreateReservationModal({ isOpen, onClose, onSuccess }: C
           email: guestEmail
         },
         room_id: roomId,
-        room_number: selectedRoom.room_number,
-        room_type: selectedRoom.room_type,
+        room_number: selectedRoomLocal.room_number,
+        room_type: selectedRoomLocal.room_type,
         check_in_date: checkIn,
         check_out_date: checkOut,
-        expected_nights: Math.ceil((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / (1000 * 60 * 60 * 24)),
+        start_time: startTime,
+        end_time: endTime,
+        expected_nights: nights,
         deposit_amount: Number(deposit) || 0,
         payment_status: Number(deposit) > 0 ? 'deposit_paid' : 'unpaid',
         status: status,
@@ -198,6 +214,22 @@ export default function CreateReservationModal({ isOpen, onClose, onSuccess }: C
                 min={checkIn || new Date().toISOString().split('T')[0]}
               />
             </div>
+            <div className="grid grid-cols-2 gap-2 mt-2">
+              <Input
+                label="Start Time"
+                type="time"
+                value={startTime}
+                onChange={e => setStartTime(e.target.value)}
+                required
+              />
+              <Input
+                label="End Time"
+                type="time"
+                value={endTime}
+                onChange={e => setEndTime(e.target.value)}
+                required
+              />
+            </div>
             
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Room</label>
@@ -223,6 +255,28 @@ export default function CreateReservationModal({ isOpen, onClose, onSuccess }: C
               onChange={e => setDeposit(e.target.value)} 
               min="0"
             />
+            <div className="bg-gray-50 border rounded-md p-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-600">Nights</span>
+                <span className="font-medium">{nights}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Price / Night</span>
+                <span className="font-medium">₦{pricePerNight.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Total Room Cost</span>
+                <span className="font-bold text-gray-900">₦{totalRoomCost.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Deposit Entered</span>
+                <span className="font-medium text-green-700">₦{(Number(deposit) || 0).toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Remaining</span>
+                <span className="font-medium">₦{Math.max(0, totalRoomCost - (Number(deposit) || 0)).toLocaleString()}</span>
+              </div>
+            </div>
           </div>
         </div>
 

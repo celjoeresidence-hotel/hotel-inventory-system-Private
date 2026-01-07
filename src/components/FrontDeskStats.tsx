@@ -2,14 +2,15 @@ import { useMemo } from 'react';
 import type { BookingWithId } from '../hooks/useFrontDesk';
 import type { RoomStatus } from '../types/frontDesk';
 import { Card } from './ui/Card';
-import { IconUserCheck, IconLogOut, IconHome, IconCreditCard } from './ui/Icons';
+import { IconUserCheck, IconHome, IconCreditCard, IconAlertCircle } from './ui/Icons';
 
 interface FrontDeskStatsProps {
   activeBookings: BookingWithId[];
   rooms: RoomStatus[];
+  financialStats?: { totalPaymentsToday: number };
 }
 
-export default function FrontDeskStats({ activeBookings, rooms }: FrontDeskStatsProps) {
+export default function FrontDeskStats({ activeBookings, rooms, financialStats }: FrontDeskStatsProps) {
   const today = new Date().toISOString().split('T')[0];
 
   const stats = useMemo(() => {
@@ -20,11 +21,12 @@ export default function FrontDeskStats({ activeBookings, rooms }: FrontDeskStats
     const totalRooms = rooms.length;
     const occupancyRate = totalRooms > 0 ? Math.round((occupied / totalRooms) * 100) : 0;
 
-    // Estimate daily revenue (sum of price_per_night for all occupied rooms)
-    // This is "Potential Revenue Today"
-    const dailyRevenue = activeBookings.reduce((sum, b) => sum + (b.data.pricing?.room_rate || 0), 0);
+    // Calculate Total Outstanding (Receivables)
+    const totalOutstanding = activeBookings.reduce((sum, b) => {
+        return sum + (b.data.payment?.balance || 0);
+    }, 0);
 
-    return { arrivals, departures, occupancyRate, dailyRevenue };
+    return { arrivals, departures, occupancyRate, totalOutstanding };
   }, [activeBookings, rooms, today]);
 
   return (
@@ -37,18 +39,6 @@ export default function FrontDeskStats({ activeBookings, rooms }: FrontDeskStats
           </div>
           <div className="p-3 bg-green-50 rounded-lg">
             <IconUserCheck className="w-6 h-6 text-green-600" />
-          </div>
-        </div>
-      </Card>
-
-      <Card className="p-6 border-l-4 border-l-red-500">
-        <div className="flex justify-between items-start">
-          <div>
-            <p className="text-sm font-medium text-gray-500">Due for Checkout</p>
-            <h3 className="text-3xl font-bold text-gray-900 mt-2">{stats.departures}</h3>
-          </div>
-          <div className="p-3 bg-red-50 rounded-lg">
-            <IconLogOut className="w-6 h-6 text-red-600" />
           </div>
         </div>
       </Card>
@@ -68,11 +58,23 @@ export default function FrontDeskStats({ activeBookings, rooms }: FrontDeskStats
       <Card className="p-6 border-l-4 border-l-yellow-500">
         <div className="flex justify-between items-start">
           <div>
-            <p className="text-sm font-medium text-gray-500">Active Daily Revenue</p>
-            <h3 className="text-3xl font-bold text-gray-900 mt-2">₦{stats.dailyRevenue.toLocaleString()}</h3>
+            <p className="text-sm font-medium text-gray-500">Payments Today</p>
+            <h3 className="text-3xl font-bold text-gray-900 mt-2">₦{(financialStats?.totalPaymentsToday || 0).toLocaleString()}</h3>
           </div>
           <div className="p-3 bg-yellow-50 rounded-lg">
             <IconCreditCard className="w-6 h-6 text-yellow-600" />
+          </div>
+        </div>
+      </Card>
+
+      <Card className="p-6 border-l-4 border-l-red-500">
+        <div className="flex justify-between items-start">
+          <div>
+            <p className="text-sm font-medium text-gray-500">Total Outstanding</p>
+            <h3 className="text-3xl font-bold text-gray-900 mt-2">₦{stats.totalOutstanding.toLocaleString()}</h3>
+          </div>
+          <div className="p-3 bg-red-50 rounded-lg">
+            <IconAlertCircle className="w-6 h-6 text-red-600" />
           </div>
         </div>
       </Card>

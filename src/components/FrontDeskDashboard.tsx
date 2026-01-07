@@ -6,15 +6,18 @@ import ActiveGuestList from './ActiveGuestList';
 import FrontDeskStats from './FrontDeskStats';
 import FrontDeskHistory from './FrontDeskHistory';
 import { Button } from './ui/Button';
-import { IconLayout, IconUserCheck, IconUsers, IconHistory, IconCalendar, IconRefresh, IconBroom } from './ui/Icons';
+import { IconLayout, IconUserCheck, IconUsers, IconHistory, IconCalendar, IconRefresh, IconBroom, IconAlertCircle } from './ui/Icons';
 import ReservationList from './ReservationList';
 import HousekeepingTab from './HousekeepingTab';
+import ResumeInterruptedStay from './ResumeInterruptedStay';
+import InterruptedStaysTab from './InterruptedStaysTab';
 
-type Tab = 'dashboard' | 'checkin' | 'guests' | 'history' | 'reservations' | 'housekeeping';
+type Tab = 'dashboard' | 'checkin' | 'guests' | 'history' | 'reservations' | 'housekeeping' | 'interrupted';
 
 export default function FrontDeskDashboard() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
-  const { rooms, activeBookings, pastBookings, loading, refresh } = useFrontDesk();
+  const { rooms, activeBookings, pastBookings, dashboardStats, loading, refresh } = useFrontDesk();
+  const [showResumeModal, setShowResumeModal] = useState(false);
 
   const handleCheckInSuccess = () => {
     refresh();
@@ -113,6 +116,17 @@ export default function FrontDeskDashboard() {
             <IconBroom className="w-5 h-5" />
             Housekeeping
           </button>
+          <button
+            onClick={() => setActiveTab('interrupted')}
+            className={`pb-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
+              activeTab === 'interrupted'
+                ? 'border-green-600 text-green-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <IconAlertCircle className="w-5 h-5" />
+            Interrupted Stays
+          </button>
         </nav>
       </div>
 
@@ -120,7 +134,7 @@ export default function FrontDeskDashboard() {
       <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
         {activeTab === 'dashboard' && (
           <div className="space-y-8">
-            <FrontDeskStats activeBookings={activeBookings} rooms={rooms} />
+            <FrontDeskStats activeBookings={activeBookings} rooms={rooms} financialStats={dashboardStats} />
             
             <div className="space-y-4">
               <div className="flex items-center justify-between">
@@ -136,7 +150,15 @@ export default function FrontDeskDashboard() {
                   View All Guests
                 </Button>
               </div>
-              <ActiveGuestList bookings={activeBookings.slice(0, 5)} loading={loading} onRefresh={refresh} />
+              <ActiveGuestList bookings={activeBookings.slice(0, 5)} rooms={rooms} loading={loading} onRefresh={refresh} />
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-bold text-gray-900">Resume Interrupted Stay</h2>
+                <Button variant="outline" onClick={() => setShowResumeModal(true)}>Open</Button>
+              </div>
+              <p className="text-sm text-gray-600">Search guests with interrupted credits and resume their stay in the same or a new room.</p>
             </div>
           </div>
         )}
@@ -144,7 +166,7 @@ export default function FrontDeskDashboard() {
         {activeTab === 'guests' && (
           <div className="space-y-6">
             <h2 className="text-xl font-bold text-gray-900">Guest Management</h2>
-            <ActiveGuestList bookings={activeBookings} loading={loading} onRefresh={refresh} />
+            <ActiveGuestList bookings={activeBookings} rooms={rooms} loading={loading} onRefresh={refresh} />
           </div>
         )}
 
@@ -173,6 +195,23 @@ export default function FrontDeskDashboard() {
             <HousekeepingTab onSubmitted={refresh} />
           </div>
         )}
+        
+        {activeTab === 'interrupted' && (
+          <div className="space-y-6">
+            <h2 className="text-xl font-bold text-gray-900">Interrupted Stays / Pending Resumption</h2>
+            <InterruptedStaysTab rooms={rooms} onRefresh={refresh} />
+          </div>
+        )}
+
+        <ResumeInterruptedStay
+          isOpen={showResumeModal}
+          onClose={() => setShowResumeModal(false)}
+          rooms={rooms}
+          onSuccess={() => {
+            setShowResumeModal(false);
+            refresh();
+          }}
+        />
       </div>
     </div>
   );

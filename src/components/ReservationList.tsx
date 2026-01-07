@@ -11,8 +11,9 @@ import {
 } from './ui/Table';
 import { Button } from './ui/Button';
 import { Badge } from './ui/Badge';
-import { IconCheckCircle, IconX, IconLoader, IconPlus } from './ui/Icons';
+import { IconCheckCircle, IconX, IconLoader, IconPlus, IconTrash2 } from './ui/Icons';
 import { ConfirmationModal } from './ConfirmationModal';
+import { DeleteConfirmationModal } from './DeleteConfirmationModal';
 import CreateReservationModal from './CreateReservationModal';
 import { convertReservationToStay } from '../utils/reservationUtils';
 
@@ -20,9 +21,13 @@ export default function ReservationList() {
   const { session } = useAuth();
   const [reservations, setReservations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'upcoming' | 'pending' | 'history'>('upcoming');
+  const [activeTab, setActiveTab] = useState<'upcoming' | 'pending' | 'missed' | 'history'>('upcoming');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [editing, setEditing] = useState<any | null>(null);
+  const [editStartTime, setEditStartTime] = useState('14:00');
+  const [editEndTime, setEditEndTime] = useState('11:00');
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Approval Modal State
   const [confirmingApproval, setConfirmingApproval] = useState<{id: string, data: any} | null>(null);
@@ -109,6 +114,52 @@ export default function ReservationList() {
     }
   };
 
+  const handleMarkNoShow = async (id: string, currentData: any) => {
+    if (!confirm('Mark this reservation as No Show?')) return;
+    if (!supabase) return;
+
+    setActionLoading(id);
+    try {
+        const { error } = await supabase
+            .from('operational_records')
+            .update({ 
+                status: 'expired', // Using expired for No Show to distinguish from explicit cancel
+                data: { 
+                    ...currentData, 
+                    status: 'no_show', // Logic status
+                    expired_reason: 'No Show',
+                    expired_by: session?.user?.id 
+                }
+            })
+            .eq('id', id);
+        if (error) throw error;
+        fetchReservations();
+    } catch (err) {
+        alert('Error marking no show');
+    } finally {
+        setActionLoading(null);
+    }
+  };
+
+  const handleDelete = (id: string) => {
+    setDeletingId(id);
+  };
+
+  const confirmDelete = async () => {
+    if (!deletingId || !supabase) return;
+    setActionLoading(deletingId);
+    try {
+      const { error } = await supabase.rpc('delete_record', { _id: deletingId });
+      if (error) throw error;
+      setDeletingId(null);
+      fetchReservations();
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete reservation. Note: Only Admins/Managers can delete records.');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const handleConvert = async (reservation: any) => {
     if (!confirm('Convert this reservation to a Check-In? This will start the stay.')) return;
     if (!supabase) return;
@@ -127,19 +178,51 @@ export default function ReservationList() {
 
   const filteredReservations = reservations.filter(r => {
     const status = r.status;
-    const checkIn = r.data.check_in_date;
-    const today = new Date().toISOString().split('T')[0];
+    const now = new Date();
+    const nowStr = `${now.toISOString().split('T')[0]}T${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:00`;
+    const start = `${r.data.check_in_date}T${(r.data.start_time || '14:00')}:00`;
+    const end = `${r.data.check_out_date}T${(r.data.end_time || '11:00')}:00`;
 
     if (activeTab === 'pending') {
         return status === 'pending';
     } else if (activeTab === 'upcoming') {
-        // Approved and future/today (not converted/cancelled)
-        return status === 'approved' && checkIn >= today;
+        return status === 'approved' && start >= nowStr && r.data?.status !== 'converted' && r.data?.reservation_status !== 'checked_in';
+    } else if (activeTab === 'missed') {
+        const isPastApprovedByTime = status === 'approved' && end < nowStr && r.data?.reservation_status !== 'checked_in';
+        const isExplicitNoShow = status === 'expired' && r.data.status === 'no_show';
+        return isPastApprovedByTime || isExplicitNoShow;
     } else {
-        // History: Converted, Cancelled, Expired, Past
-        return ['converted', 'cancelled', 'expired'].includes(status) || (status === 'approved' && checkIn < today);
+        // History: Cancelled, Expired (other than no_show)
+        const isExplicitNoShow = status === 'expired' && r.data.status === 'no_show';
+        if (isExplicitNoShow) return false; // Handled in missed tab
+        // Exclude converted reservations entirely from the reservations list
+        return ['cancelled', 'expired'].includes(status);
     }
   });
+  
+  const saveEditTimes = async () => {
+    if (!editing || !supabase) return;
+    setActionLoading(editing.id);
+    try {
+      const { error } = await supabase
+        .from('operational_records')
+        .update({
+          data: {
+            ...editing.data,
+            start_time: editStartTime,
+            end_time: editEndTime
+          }
+        })
+        .eq('id', editing.id);
+      if (error) throw error;
+      setEditing(null);
+      fetchReservations();
+    } catch (err: any) {
+      alert(err.message || 'Error saving times');
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -166,6 +249,31 @@ export default function ReservationList() {
           {reservations.filter(r => r.status === 'pending').length > 0 && (
             <span className="ml-2 bg-yellow-100 text-yellow-800 text-xs px-2 py-0.5 rounded-full">
                 {reservations.filter(r => r.status === 'pending').length}
+            </span>
+          )}
+        </button>
+        <button
+          className={`py-2 px-4 font-medium text-sm ${activeTab === 'missed' ? 'border-b-2 border-green-500 text-green-600' : 'text-gray-500 hover:text-gray-700'}`}
+          onClick={() => setActiveTab('missed')}
+        >
+          Missed / No Show
+          {reservations.filter(r => {
+             const status = r.status;
+             const checkIn = r.data.check_in_date;
+             const today = new Date().toISOString().split('T')[0];
+             const isPastApproved = status === 'approved' && checkIn < today;
+             const isExplicitNoShow = status === 'expired' && r.data.status === 'no_show';
+             return isPastApproved || isExplicitNoShow;
+          }).length > 0 && (
+            <span className="ml-2 bg-red-100 text-red-800 text-xs px-2 py-0.5 rounded-full">
+                {reservations.filter(r => {
+                    const status = r.status;
+                    const checkIn = r.data.check_in_date;
+                    const today = new Date().toISOString().split('T')[0];
+                    const isPastApproved = status === 'approved' && checkIn < today;
+                    const isExplicitNoShow = status === 'expired' && r.data.status === 'no_show';
+                    return isPastApproved || isExplicitNoShow;
+                }).length}
             </span>
           )}
         </button>
@@ -217,8 +325,8 @@ export default function ReservationList() {
                     </TableCell>
                     <TableCell>
                         <div className="text-sm">
-                            In: {r.data.check_in_date}<br/>
-                            Out: {r.data.check_out_date}
+                            In: {r.data.check_in_date} {r.data.start_time || '14:00'}<br/>
+                            Out: {r.data.check_out_date} {r.data.end_time || '11:00'}
                         </div>
                     </TableCell>
                     <TableCell>
@@ -229,13 +337,22 @@ export default function ReservationList() {
                         )}
                     </TableCell>
                     <TableCell>
-                        <Badge variant={
+                        {(() => {
+                          const now = new Date();
+                          const nowStr = `${now.toISOString().split('T')[0]}T${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:00`;
+                          const start = `${r.data.check_in_date}T${(r.data.start_time || '14:00')}:00`;
+                          const end = `${r.data.check_out_date}T${(r.data.end_time || '11:00')}:00`;
+                          const isReserved = r.status === 'approved' && start <= nowStr && end > nowStr && r.data?.reservation_status !== 'checked_in';
+                          const isMissed = r.status === 'approved' && end <= nowStr && r.data?.reservation_status !== 'checked_in';
+                          const label = r.data.status === 'no_show' ? 'No Show' : isReserved ? 'reserved' : isMissed ? 'missed' : r.status;
+                          const variant = label === 'reserved' ? 'warning' : label === 'missed' ? 'error' : (
                             r.status === 'approved' ? 'success' : 
                             r.status === 'pending' ? 'warning' : 
-                            r.status === 'converted' ? 'default' : 'error'
-                        }>
-                            {r.status}
-                        </Badge>
+                            r.status === 'converted' ? 'default' : 
+                            'error'
+                          );
+                          return <Badge variant={variant}>{label}</Badge>;
+                        })()}
                     </TableCell>
                     <TableCell>
                         <div className="flex items-center gap-2">
@@ -263,15 +380,38 @@ export default function ReservationList() {
                                 </>
                             )}
 
-                            {r.status === 'approved' && (
+                            {r.status === 'approved' && activeTab === 'upcoming' && (
                                 <>
                                     <Button 
                                         size="sm" 
                                         className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-2 py-1 h-auto"
                                         onClick={() => handleConvert(r)}
-                                        disabled={!!actionLoading}
+                                        disabled={!!actionLoading || `${r.data.check_in_date}T${(r.data.start_time || '14:00')}:00` > `${new Date().toISOString().split('T')[0]}T${String(new Date().getHours()).padStart(2, '0')}:${String(new Date().getMinutes()).padStart(2, '0')}:00`}
+                                        title={`${r.data.check_in_date}T${(r.data.start_time || '14:00')}:00` > `${new Date().toISOString().split('T')[0]}T${String(new Date().getHours()).padStart(2, '0')}:${String(new Date().getMinutes()).padStart(2, '0')}:00` ? 'Check-in available when start time is reached' : undefined}
                                     >
                                         Check In
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="text-gray-700 hover:bg-gray-50 border-gray-200 text-xs px-2 py-1 h-auto"
+                                      onClick={() => {
+                                        setEditing(r);
+                                        setEditStartTime(r.data.start_time || '14:00');
+                                        setEditEndTime(r.data.end_time || '11:00');
+                                      }}
+                                    >
+                                      Edit Time
+                                    </Button>
+                                    <Button 
+                                        size="sm" 
+                                        variant="ghost"
+                                        className="text-gray-700 hover:text-gray-900 h-8 w-8 p-0"
+                                        onClick={() => handleDelete(r.id)}
+                                        disabled={!!actionLoading}
+                                        title="Delete Reservation"
+                                    >
+                                        <IconTrash2 size={16} />
                                     </Button>
                                     <Button 
                                         size="sm" 
@@ -286,6 +426,30 @@ export default function ReservationList() {
                                 </>
                             )}
                             
+                            {/* Actions for Missed Reservations */}
+                            {activeTab === 'missed' && r.status === 'approved' && (
+                                <>
+                                    <Button 
+                                        size="sm" 
+                                        className="bg-red-600 hover:bg-red-700 text-white text-xs px-2 py-1 h-auto"
+                                        onClick={() => handleMarkNoShow(r.id, r.data)}
+                                        disabled={!!actionLoading}
+                                    >
+                                        Mark No Show
+                                    </Button>
+                                    <Button 
+                                        size="sm" 
+                                        variant="outline"
+                                        className="text-gray-600 hover:text-gray-800 h-8 w-8 p-0"
+                                        onClick={() => handleConvert(r)} // Still allow check-in if late?
+                                        disabled={!!actionLoading}
+                                        title="Late Check In"
+                                    >
+                                        <IconCheckCircle size={16} />
+                                    </Button>
+                                </>
+                            )}
+
                             {actionLoading === r.id && <IconLoader className="animate-spin w-4 h-4 text-gray-500" />}
                         </div>
                     </TableCell>
@@ -312,6 +476,50 @@ export default function ReservationList() {
         confirmVariant="primary"
         loading={isApproving}
       />
+      
+      <DeleteConfirmationModal
+        isOpen={!!deletingId}
+        onClose={() => setDeletingId(null)}
+        onConfirm={confirmDelete}
+        title="Delete Reservation"
+        message="Are you sure you want to delete this reservation? This will remove it from lists. You can still view it under Risk analytics."
+        itemName={reservations.find(r => r.id === deletingId)?.data?.reservation_code}
+        loading={!!actionLoading}
+      />
+      
+      {editing && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+          <div className="bg-white rounded-md shadow-lg p-6 w-full max-w-md">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Edit Reservation Time</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Start Time</label>
+                <input
+                  type="time"
+                  value={editStartTime}
+                  onChange={(e) => setEditStartTime(e.target.value)}
+                  className="w-full border-gray-300 rounded-md shadow-sm focus:border-green-500 focus:ring-green-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">End Time</label>
+                <input
+                  type="time"
+                  value={editEndTime}
+                  onChange={(e) => setEditEndTime(e.target.value)}
+                  className="w-full border-gray-300 rounded-md shadow-sm focus:border-green-500 focus:ring-green-500"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+              <Button onClick={saveEditTimes} disabled={!!actionLoading} className="bg-green-600 hover:bg-green-700 text-white">
+                Save
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

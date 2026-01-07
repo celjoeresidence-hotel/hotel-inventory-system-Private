@@ -39,8 +39,8 @@ interface InventoryStructureTabProps {
 }
 
 export default function InventoryStructureTab({ onStructureChange }: InventoryStructureTabProps) {
-  const { session, isConfigured, isSupervisor, isManager, isAdmin } = useAuth();
-  const canEditStructure = Boolean(isSupervisor || isManager || isAdmin);
+  const { session, isConfigured, isSupervisor, isManager, isAdmin, role } = useAuth();
+  const canEditStructure = Boolean(isSupervisor || isManager || isAdmin || role === 'storekeeper');
 
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);

@@ -21,7 +21,7 @@ import {
   TableCell
 } from './ui/Table';
 
-type ReportSection = 'kitchen' | 'bar' | 'storekeeper' | 'housekeeping';
+type ReportSection = 'kitchen' | 'bar' | 'storekeeper' | 'housekeeping' | 'front_desk';
 type QueryMode = 'day' | 'range' | 'month' | 'year';
 
 interface DailySummary {
@@ -50,21 +50,22 @@ export default function Reports() {
     kitchen: [],
     bar: [],
     storekeeper: [],
-    housekeeping: []
+    housekeeping: [],
+    front_desk: []
   });
   const [roomDisplayMap, setRoomDisplayMap] = useState<Record<string, string>>({});
-  const [dailyEvents, setDailyEvents] = useState<Record<Exclude<ReportSection, 'housekeeping'>, any[]>>({
+  const [dailyEvents, setDailyEvents] = useState<Record<Exclude<ReportSection, 'housekeeping' | 'front_desk'>, any[]>>({
     kitchen: [],
     bar: [],
     storekeeper: []
   });
   const [staffDisplay, setStaffDisplay] = useState<Record<string, { full_name: string; role?: string | null; department?: string | null }>>({});
-  const [openingStockMap, setOpeningStockMap] = useState<Record<Exclude<ReportSection, 'housekeeping'>, Record<string, number>>>({
+  const [openingStockMap, setOpeningStockMap] = useState<Record<Exclude<ReportSection, 'housekeeping' | 'front_desk'>, Record<string, number>>>({
     kitchen: {},
     bar: {},
     storekeeper: {}
   });
-  const [anomalies, setAnomalies] = useState<Record<Exclude<ReportSection, 'housekeeping'>, string[]>>({
+  const [anomalies, setAnomalies] = useState<Record<Exclude<ReportSection, 'housekeeping' | 'front_desk'>, string[]>>({
     kitchen: [],
     bar: [],
     storekeeper: []
@@ -94,7 +95,7 @@ export default function Reports() {
           end = `${year}-12-31`;
         }
 
-        const results: Record<ReportSection, any[]> = { kitchen: [], bar: [], storekeeper: [], housekeeping: [] };
+        const results: Record<ReportSection, any[]> = { kitchen: [], bar: [], storekeeper: [], housekeeping: [], front_desk: [] };
         const newSummaries: DailySummary[] = [];
 
         // 1. Fetch Inventory Data in Parallel
@@ -207,7 +208,15 @@ export default function Reports() {
           .gte('data->>report_date', start)
           .lte('data->>report_date', end);
 
-        const [invResults, hkRes] = await Promise.all([inventoryPromise, hkPromise]);
+        // 3. Fetch Front Desk Events (Extensions & Transfers)
+        const fdPromise = supabase!.from('operational_records')
+          .select('id, created_at, status, data, submitted_by')
+          .eq('entity_type', 'front_desk')
+          .in('data->>type', ['stay_extension', 'room_transfer'])
+          .gte('data->>date', start)
+          .lte('data->>date', end);
+
+        const [invResults, hkRes, fdRes] = await Promise.all([inventoryPromise, hkPromise, fdPromise]);
 
         // Process Inventory Results
         const allEventsForIdentity: any[] = [];
@@ -287,10 +296,54 @@ export default function Reports() {
           status: hkRows.length > 0 ? 'submitted' : 'pending'
         });
 
+        // Process Front Desk Events
+        const fdRecords = fdRes.data || [];
+        const fdRows = fdRecords.map((r: any) => {
+          const d = r.data || {};
+          const t = String(d.type || '').toLowerCase();
+          const action = t === 'stay_extension' ? 'Stay Extension' : t === 'room_transfer' ? 'Room Transfer' : 'Interrupted Stay Credit';
+          const details = t === 'stay_extension'
+            ? `New checkout: ${d.extension?.new_check_out} • +${d.extension?.nights_added} night(s)`
+            : t === 'room_transfer'
+            ? `Room ${d.transfer?.previous_room_id} → ${d.transfer?.new_room_id} • ${d.transfer?.transfer_date}`
+            : `Guest: ${d.guest_name} • Credit: ₦${Number(d.credit_remaining || 0).toLocaleString()}`;
+          const impact = t === 'stay_extension'
+            ? (Number(d.extension?.additional_cost || 0))
+            : t === 'room_transfer'
+            ? (Number(d.transfer?.new_charge_amount || 0) - Number(d.transfer?.refund_amount || 0))
+            : Number(d.credit_remaining || 0);
+          return {
+            id: r.id,
+            created_at: r.created_at,
+            record_status: r.status,
+            date: d.date,
+            action,
+            details,
+            financial_impact: impact,
+            submitted_by: r.submitted_by
+          };
+        }).sort((a: any, b: any) => new Date(a.date || a.created_at).getTime() - new Date(b.date || b.created_at).getTime());
+        results.front_desk = fdRows;
+
+        // FD Summary
+        const extCount = fdRows.filter((r: any) => r.action === 'Stay Extension').length;
+        const trfCount = fdRows.filter((r: any) => r.action === 'Room Transfer').length;
+        const intrCount = fdRows.filter((r: any) => r.action === 'Interrupted Stay Credit').length;
+        newSummaries.push({
+          section: 'front_desk',
+          total_records: fdRows.length,
+          last_updated: fdRows.length > 0 ? (fdRows[fdRows.length - 1].created_at || fdRows[fdRows.length - 1].date) : new Date().toISOString(),
+          items_restocked: extCount,
+          items_issued: trfCount,
+          items_discarded: intrCount,
+          status: fdRows.length > 0 ? 'submitted' : 'pending'
+        });
+
         // Batch Identity Resolution
         const userIds = new Set<string>();
         allEventsForIdentity.forEach(e => { if (e.submitted_by) userIds.add(e.submitted_by); });
         hkRows.forEach((r: any) => { if (r.housekeeper_id) userIds.add(r.housekeeper_id); });
+        fdRows.forEach((r: any) => { if (r.submitted_by) userIds.add(r.submitted_by); });
         
         if (userIds.size > 0) {
            const ids = Array.from(userIds);
@@ -355,6 +408,7 @@ export default function Reports() {
       case 'bar': return '🍹';
       case 'storekeeper': return '📦';
       case 'housekeeping': return '🧹';
+      case 'front_desk': return '🛎️';
       default: return '📄';
     }
   };
@@ -499,15 +553,21 @@ export default function Reports() {
                 {summary.status === 'submitted' && (
                   <div className="grid grid-cols-3 gap-2 text-sm">
                     <div className="bg-blue-50 p-2 rounded border border-blue-100 text-center">
-                      <span className="block text-blue-600 text-xs uppercase tracking-wider mb-1">{summary.section === 'housekeeping' ? 'Cleaned' : 'In'}</span>
+                      <span className="block text-blue-600 text-xs uppercase tracking-wider mb-1">
+                        {summary.section === 'housekeeping' ? 'Cleaned' : summary.section === 'front_desk' ? 'Extensions' : 'In'}
+                      </span>
                       <span className="font-bold text-blue-900">{summary.items_restocked}</span>
                     </div>
                     <div className="bg-amber-50 p-2 rounded border border-amber-100 text-center">
-                      <span className="block text-amber-600 text-xs uppercase tracking-wider mb-1">{summary.section === 'housekeeping' ? 'Dirty' : 'Out'}</span>
+                      <span className="block text-amber-600 text-xs uppercase tracking-wider mb-1">
+                        {summary.section === 'housekeeping' ? 'Dirty' : summary.section === 'front_desk' ? 'Transfers' : 'Out'}
+                      </span>
                       <span className="font-bold text-amber-900">{summary.items_issued}</span>
                     </div>
                     <div className="bg-red-50 p-2 rounded border border-red-100 text-center">
-                      <span className="block text-red-600 text-xs uppercase tracking-wider mb-1">{summary.section === 'housekeeping' ? 'Maintenance' : 'Waste'}</span>
+                      <span className="block text-red-600 text-xs uppercase tracking-wider mb-1">
+                        {summary.section === 'housekeeping' ? 'Maintenance' : summary.section === 'front_desk' ? 'Adjustments' : 'Waste'}
+                      </span>
                       <span className="font-bold text-red-900">{summary.items_discarded}</span>
                     </div>
                   </div>
@@ -577,6 +637,47 @@ export default function Reports() {
                 </TableBody>
               </Table>
             </div>
+          ) : expandedSection === 'front_desk' ? (
+            <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Time</TableHead>
+                    <TableHead>Staff</TableHead>
+                    <TableHead>Action</TableHead>
+                    <TableHead>Details</TableHead>
+                    <TableHead className="text-right">Financial Impact</TableHead>
+                    <TableHead>Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {getBreakdown.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+                        No data available for this period.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    getBreakdown.map((row: any) => {
+                      const staff = row.submitted_by ? (staffDisplay[row.submitted_by]?.full_name || 'Unknown') : 'Unknown';
+                      const dept = row.submitted_by ? staffDisplay[row.submitted_by]?.department : undefined;
+                      return (
+                        <TableRow key={row.id} className="hover:bg-gray-50">
+                          <TableCell className="font-mono text-gray-700">
+                            {new Date(row.created_at || row.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </TableCell>
+                          <TableCell className="text-gray-800">{dept ? `${staff} (${dept})` : staff}</TableCell>
+                          <TableCell className="font-medium text-gray-900">{row.action}</TableCell>
+                          <TableCell className="text-gray-700">{row.details}</TableCell>
+                          <TableCell className="text-right font-mono text-gray-900">{`₦${Number(row.financial_impact || 0).toLocaleString()}`}</TableCell>
+                          <TableCell className="text-xs uppercase px-2 py-1 rounded-full bg-gray-100 text-gray-700 inline-block">{row.record_status}</TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           ) : (
             <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
               <Table>
@@ -600,13 +701,13 @@ export default function Reports() {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    (dailyEvents[expandedSection as Exclude<ReportSection, 'housekeeping'>] || []).length === 0 ? (
+                    (dailyEvents[expandedSection as Exclude<ReportSection, 'housekeeping' | 'front_desk'>] || []).length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={8} className="text-center py-8 text-gray-500">No actions recorded for this date.</TableCell>
                       </TableRow>
                     ) : (
-                      (dailyEvents[expandedSection as Exclude<ReportSection, 'housekeeping'>] || []).map((ev: any, idx: number) => {
-                        const open = openingStockMap[expandedSection as Exclude<ReportSection, 'housekeeping'>]?.[ev.item_name] ?? 0;
+                      (dailyEvents[expandedSection as Exclude<ReportSection, 'housekeeping' | 'front_desk'>] || []).map((ev: any, idx: number) => {
+                        const open = openingStockMap[expandedSection as Exclude<ReportSection, 'housekeeping' | 'front_desk'>]?.[ev.item_name] ?? 0;
                         const closing = open + ev.quantity_change;
                         const staff = ev.submitted_by ? (staffDisplay[ev.submitted_by]?.full_name || ev.staff_name || 'Unknown') : (ev.staff_name || 'Unknown');
                         const dept = staffDisplay[ev.submitted_by || '']?.department;
@@ -627,10 +728,10 @@ export default function Reports() {
                   )}
                 </TableBody>
               </Table>
-              {queryMode === 'day' && (anomalies[expandedSection as Exclude<ReportSection, 'housekeeping'>] || []).length > 0 && (
+              {queryMode === 'day' && (anomalies[expandedSection as Exclude<ReportSection, 'housekeeping' | 'front_desk'>] || []).length > 0 && (
                 <div className="p-4 border-t border-gray-100 text-sm text-gray-700">
                   <p className="font-semibold text-gray-900 mb-2">Anomaly Insights</p>
-                  {(anomalies[expandedSection as Exclude<ReportSection, 'housekeeping'>] || []).map((n, i) => (
+                  {(anomalies[expandedSection as Exclude<ReportSection, 'housekeeping' | 'front_desk'>] || []).map((n, i) => (
                     <div key={i} className="mb-1">• {n}</div>
                   ))}
                 </div>

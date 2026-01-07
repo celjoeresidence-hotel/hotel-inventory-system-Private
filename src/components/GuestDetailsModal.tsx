@@ -8,18 +8,21 @@ import { IconUser, IconCreditCard, IconAlertCircle, IconClock, IconTrash2 as Ico
 import { DeleteConfirmationModal } from './DeleteConfirmationModal';
 import type { BookingWithId } from '../hooks/useFrontDesk';
 import { useAuth } from '../context/AuthContext';
-import { format } from 'date-fns';
+import { format, addDays, differenceInCalendarDays, parseISO } from 'date-fns';
+import { normalizeLedger, calculateLedgerSummary } from '../utils/ledgerUtils';
+import type { LedgerEntry, RoomStatus } from '../types/frontDesk';
 
 interface GuestDetailsModalProps {
   isOpen: boolean;
   onClose: () => void;
   booking: BookingWithId | null;
+  rooms?: RoomStatus[]; // Added for transfer/extension availability checks
   onUpdate: () => void; // Refresh parent
 }
 
 type Tab = 'overview' | 'financials' | 'history';
 
-export default function GuestDetailsModal({ isOpen, onClose, booking, onUpdate }: GuestDetailsModalProps) {
+export default function GuestDetailsModal({ isOpen, onClose, booking, rooms, onUpdate }: GuestDetailsModalProps) {
   const { user, role, staffId, ensureActiveSession } = useAuth();
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [loading, setLoading] = useState(false);
@@ -39,6 +42,16 @@ export default function GuestDetailsModal({ isOpen, onClose, booking, onUpdate }
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [recordToDelete, setRecordToDelete] = useState<any>(null);
+
+  // Extension State
+  const [showExtendStay, setShowExtendStay] = useState(false);
+  const [extensionDays, setExtensionDays] = useState(1);
+  const [extensionReason, setExtensionReason] = useState('');
+
+  // Transfer State
+  const [showTransferRoom, setShowTransferRoom] = useState(false);
+  const [selectedNewRoomId, setSelectedNewRoomId] = useState('');
+  const [transferReason, setTransferReason] = useState('');
 
   useEffect(() => {
     if (isOpen && booking) {
@@ -70,33 +83,46 @@ export default function GuestDetailsModal({ isOpen, onClose, booking, onUpdate }
     }
   };
 
-  const financials = useMemo(() => {
-    if (!booking) return null;
-    const roomCost = booking.data.pricing?.total_room_cost || 0;
-    
-    // Calculate from related records
-    let penalties = 0;
-    let payments = booking.data.payment?.paid_amount || 0; // Initial payment
-    let discounts = booking.data.pricing?.discount_amount || 0;
-
-    relatedRecords.forEach(rec => {
-        const d = rec.data;
-        if (d.type === 'penalty_fee') {
-            penalties += Number(d.amount || 0);
-        }
-        if (d.type === 'payment_record') {
-            payments += Number(d.amount || 0);
-        }
-        if (d.type === 'discount_applied') {
-            discounts += Number(d.amount || 0);
-        }
-    });
-
-    const totalDue = roomCost + penalties - discounts;
-    const balance = totalDue - payments;
-
-    return { roomCost, penalties, payments, discounts, totalDue, balance };
+  const ledgerEntries = useMemo(() => {
+    if (!booking) return [];
+    return normalizeLedger(booking, relatedRecords);
   }, [booking, relatedRecords]);
+
+  const ledgerSummary = useMemo(() => {
+    return calculateLedgerSummary(ledgerEntries);
+  }, [ledgerEntries]);
+
+  const updateBookingBalance = async () => {
+      if (!booking) return;
+      // 1. Fetch all related records to get accurate balance
+      const { data: records } = await supabase!
+        .from('operational_records')
+        .select('*')
+        .or(`data->>booking_id.eq.${booking.id},original_id.eq.${booking.original_id}`);
+      
+      if (!records) return;
+
+      // 2. Calculate new balance
+      const entries = normalizeLedger(booking, records);
+      const summary = calculateLedgerSummary(entries);
+
+      // 3. Update the parent booking record with the new balance
+      // We must be careful not to overwrite other concurrent updates, but for now this is fine.
+      // We also update the 'payment' object in data to reflect the new state.
+      const updatedPayment = {
+          ...booking.data.payment,
+          balance: summary.balance,
+          // We could also update paid_amount if we wanted to track total paid in the snapshot
+          paid_amount: summary.totalPayments
+      };
+
+      await supabase!
+        .from('operational_records')
+        .update({
+            data: { ...booking.data, payment: updatedPayment }
+        })
+        .eq('id', booking.id);
+  };
 
   const handleAddPenalty = async () => {
     if (!booking || !penaltyAmount || !penaltyReason) return;
@@ -119,6 +145,9 @@ export default function GuestDetailsModal({ isOpen, onClose, booking, onUpdate }
             status: 'approved' // Auto-approve via our new trigger logic
         });
         if (error) throw error;
+        
+        await updateBookingBalance(); // Sync balance to booking record
+
         setShowAddPenalty(false);
         setPenaltyAmount('');
         setPenaltyReason('');
@@ -153,6 +182,9 @@ export default function GuestDetailsModal({ isOpen, onClose, booking, onUpdate }
             status: 'approved'
         });
         if (error) throw error;
+        
+        await updateBookingBalance(); // Sync balance to booking record
+
         setShowAddPayment(false);
         setPaymentAmount('');
         fetchRelatedRecords();
@@ -226,6 +258,247 @@ export default function GuestDetailsModal({ isOpen, onClose, booking, onUpdate }
     }
   };
 
+  const handleExtendStay = async () => {
+    if (!booking || !extensionDays || !extensionReason) return;
+    try {
+        setLoading(true);
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) { alert('Session expired.'); setLoading(false); return; }
+
+        const currentCheckOut = parseISO(booking.data.stay?.check_out || '');
+        const newCheckOutDate = addDays(currentCheckOut, Number(extensionDays));
+        const newCheckOutStr = format(newCheckOutDate, 'yyyy-MM-dd');
+
+        // Check availability (Simple check against active bookings)
+        // In a real app, use a robust RPC or server-side check.
+        // Here we query for overlapping bookings in the same room.
+        const { data: conflicts } = await supabase!
+            .from('operational_records')
+            .select('data')
+            .eq('data->stay->room_id', booking.data.stay?.room_id)
+            .neq('id', booking.id) // Exclude self
+            .filter('data->stay->check_in', 'lt', newCheckOutStr) // Starts before we leave
+            .filter('data->stay->check_out', 'gt', format(currentCheckOut, 'yyyy-MM-dd')); // Ends after we start extension
+
+        // Note: The filter above is rough. Overlap logic: StartA < EndB && EndA > StartB.
+        // Extension period is: CurrentCheckOut to NewCheckOut.
+        // We check if any booking overlaps with this period.
+        
+        if (conflicts && conflicts.length > 0) {
+            alert('Cannot extend: Room has conflicting reservations during this period.');
+            setLoading(false);
+            return;
+        }
+
+        const roomRate = Number(booking.data.pricing?.room_rate || 0);
+        const additionalCost = roomRate * Number(extensionDays);
+
+        // 1. Insert Extension Record
+        const { error } = await supabase!.from('operational_records').insert({
+            entity_type: 'front_desk',
+            data: {
+                type: 'stay_extension',
+                booking_id: booking.id,
+                extension: {
+                    previous_check_out: booking.data.stay?.check_out,
+                    new_check_out: newCheckOutStr,
+                    nights_added: Number(extensionDays),
+                    additional_cost: additionalCost,
+                    reason: extensionReason
+                },
+                financial_amount: additionalCost,
+                date: new Date().toISOString()
+            },
+            submitted_by: user?.id,
+            status: 'approved'
+        });
+
+        if (error) throw error;
+
+        // Append-only: do not update the original booking record check_out.
+        // Occupancy will be extended via segment logic in useFrontDesk.
+
+        await updateBookingBalance();
+
+        setShowExtendStay(false);
+        setExtensionDays(1);
+        setExtensionReason('');
+        fetchRelatedRecords();
+        onUpdate();
+        alert('Stay extended successfully.');
+    } catch (err) {
+        console.error('Error extending stay:', err);
+        alert('Failed to extend stay');
+    } finally {
+        setLoading(false);
+    }
+  };
+
+  const handleTransferRoom = async () => {
+    if (!booking || !selectedNewRoomId || !transferReason) return;
+    if (!rooms) { alert('Room data not available'); return; }
+
+    try {
+        setLoading(true);
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) { alert('Session expired.'); setLoading(false); return; }
+
+        const today = new Date();
+        const checkOutDate = parseISO(booking.data.stay?.check_out || '');
+        const remainingNights = differenceInCalendarDays(checkOutDate, today);
+
+        if (remainingNights <= 0) {
+            alert('Cannot transfer: Stay is already over or ends today. Please checkout instead.');
+            setLoading(false);
+            return;
+        }
+
+        const newRoom = rooms.find(r => r.id === selectedNewRoomId);
+        if (!newRoom) { alert('Invalid room selected'); setLoading(false); return; }
+        
+        // Basic Availability Check for New Room
+        if (newRoom.status !== 'available') {
+             // In strict mode, we block. But maybe they are transferring to a dirty room to clean it?
+             // Let's warn but allow if user insists? No, strict for now.
+             // Actually, "available" status in `rooms` might be just for *now*.
+             // We assume if it's available now, we can move in.
+             // But we should check future bookings too.
+             // For MVP, we trust `status === 'available'`.
+             // But wait, what if it's booked tomorrow?
+             // We should check conflicts like in extension.
+             const { data: conflicts } = await supabase!
+                .from('operational_records')
+                .select('id')
+                .eq('data->stay->room_id', selectedNewRoomId)
+                .filter('data->stay->check_in', 'lt', booking.data.stay?.check_out || '') // Ends after today (implicit)
+                .filter('data->stay->check_out', 'gt', format(today, 'yyyy-MM-dd'));
+
+             if (conflicts && conflicts.length > 0) {
+                alert(`Room ${newRoom.room_number} has conflicting reservations.`);
+                setLoading(false);
+                return;
+             }
+        }
+
+        const oldRate = Number(booking.data.pricing?.room_rate || 0);
+        const newRate = Number(newRoom.price_per_night || oldRate);
+        
+        // Strategy: Split Booking
+        // 1. Update Current Booking (End Today)
+        const daysStayed = differenceInCalendarDays(today, parseISO(booking.data.stay?.check_in || ''));
+        const adjustedOldCost = daysStayed * oldRate;
+        const refundAmount = Math.max(0, Number(booking.data.pricing?.total_room_cost) - adjustedOldCost);
+
+        // 2. Create New Booking (Start Today)
+        const newCost = remainingNights * newRate;
+        const { error: newBookingError } = await supabase!.from('operational_records').insert({
+            entity_type: 'front_desk',
+            data: {
+                type: 'room_booking',
+                booking_id: crypto.randomUUID(), // New ID
+                original_id: booking.original_id || booking.data.booking_id || booking.id, // Link to original
+                guest: booking.data.guest,
+                stay: {
+                    room_id: newRoom.id,
+                    check_in: format(today, 'yyyy-MM-dd'),
+                    check_out: booking.data.stay?.check_out, // Original end date
+                    adults: booking.data.stay?.adults,
+                    children: booking.data.stay?.children
+                },
+                pricing: {
+                    room_rate: newRate,
+                    nights: remainingNights,
+                    total_room_cost: newCost
+                },
+                payment: {
+                    paid_amount: 0, // Paid in previous booking or handled via balance
+                    payment_method: 'transfer',
+                    balance: 0 // Will be calculated by aggregate
+                },
+                status: 'checked_in'
+            },
+            submitted_by: user?.id,
+            status: 'approved'
+        });
+
+        if (newBookingError) throw newBookingError;
+
+        // 2b. Insert refund record if applicable (credit)
+        if (refundAmount > 0) {
+          await supabase!.from('operational_records').insert({
+            entity_type: 'front_desk',
+            data: {
+              type: 'refund_record',
+              booking_id: booking.id,
+              amount: refundAmount,
+              reason: 'Transfer adjustment',
+              date: new Date().toISOString()
+            },
+            financial_amount: -refundAmount,
+            submitted_by: user?.id,
+            status: 'approved'
+          });
+        }
+
+        // 3. Log Transfer Record
+        await supabase!.from('operational_records').insert({
+             entity_type: 'front_desk',
+             data: {
+                 type: 'room_transfer',
+                 booking_id: booking.id,
+                 transfer: {
+                     previous_room_id: booking.data.stay?.room_id,
+                     new_room_id: selectedNewRoomId,
+                     transfer_date: format(today, 'yyyy-MM-dd'),
+                     reason: transferReason,
+                     refund_amount: refundAmount, // Just for log, logic handled by split
+                     new_charge_amount: newCost
+                 },
+                 date: new Date().toISOString()
+             },
+             submitted_by: user?.id,
+             status: 'approved'
+        });
+
+        // 4. Mark old room housekeeping required via report (dirty)
+        await supabase!.from('operational_records').insert({
+          entity_type: 'front_desk',
+          data: {
+            type: 'housekeeping_report',
+            room_id: booking.data.stay?.room_id,
+            housekeeping_status: 'dirty',
+            room_condition: 'needs_attention',
+            maintenance_required: false,
+            notes: 'Auto-marked dirty after room transfer',
+            housekeeper_id: staffId,
+            housekeeper_name: 'Front Desk',
+            report_date: format(today, 'yyyy-MM-dd')
+          },
+          financial_amount: 0
+        });
+
+        // Update Room Statuses (Optional if handled by backend triggers, but good to be explicit)
+        // Set Old Room -> Dirty
+        // Set New Room -> Occupied
+        // We assume backend or ActiveGuestList handles this based on active bookings.
+        // But we might want to trigger a housekeeping status update.
+        // For now, rely on booking dates.
+
+        setShowTransferRoom(false);
+        setTransferReason('');
+        setSelectedNewRoomId('');
+        onUpdate();
+        onClose(); // Close modal as the current booking object is now stale/closed
+        alert(`Transferred to Room ${newRoom.room_number}. Please reopen the guest details to see updated status.`);
+
+    } catch (err) {
+        console.error('Error transferring room:', err);
+        alert('Failed to transfer room');
+    } finally {
+        setLoading(false);
+    }
+  };
+
   const handleDeleteRecord = (record: any) => {
     setRecordToDelete(record);
     setShowDeleteConfirm(true);
@@ -283,6 +556,53 @@ export default function GuestDetailsModal({ isOpen, onClose, booking, onUpdate }
                     </div>
                 </div>
                 
+                <div className="border-t pt-4 mt-4">
+                    <h4 className="font-bold text-gray-700 mb-2">Stay Management</h4>
+                    <div className="flex gap-2 flex-wrap">
+                        <Button variant="outline" onClick={() => setShowExtendStay(!showExtendStay)}>Extend Stay</Button>
+                        <Button variant="outline" onClick={() => setShowTransferRoom(!showTransferRoom)}>Transfer Room</Button>
+                    </div>
+
+                    {showExtendStay && (
+                        <div className="bg-blue-50 p-4 rounded border border-blue-200 mt-2 animate-in slide-in-from-top-2">
+                            <h5 className="font-bold text-blue-800 mb-2">Extend Stay</h5>
+                            <div className="grid grid-cols-2 gap-4">
+                                <Input label="Nights to Add" type="number" min="1" value={extensionDays} onChange={e => setExtensionDays(Number(e.target.value))} />
+                                <div className="flex items-end pb-2 text-sm text-gray-600">
+                                    New Check-out: {booking.data.stay?.check_out ? format(addDays(parseISO(booking.data.stay.check_out), Number(extensionDays)), 'MMM d, yyyy') : '-'}
+                                </div>
+                            </div>
+                            <Input label="Reason" value={extensionReason} onChange={e => setExtensionReason(e.target.value)} placeholder="e.g. Guest request" className="mt-2" />
+                            <div className="flex gap-2 mt-2">
+                                <Button variant="secondary" onClick={() => setShowExtendStay(false)}>Cancel</Button>
+                                <Button onClick={handleExtendStay} disabled={loading}>Confirm Extension</Button>
+                            </div>
+                        </div>
+                    )}
+
+                    {showTransferRoom && (
+                        <div className="bg-purple-50 p-4 rounded border border-purple-200 mt-2 animate-in slide-in-from-top-2">
+                            <h5 className="font-bold text-purple-800 mb-2">Transfer Room</h5>
+                            <p className="text-sm text-purple-600 mb-2">Moves guest to a new room starting TODAY. Unused nights in old room will be refunded/credited.</p>
+                            
+                            <Select label="New Room" value={selectedNewRoomId} onChange={e => setSelectedNewRoomId(e.target.value)}>
+                                <option value="">Select Room...</option>
+                                {rooms?.filter(r => r.status === 'available' && r.id !== booking.data.stay?.room_id).map(r => (
+                                    <option key={r.id} value={r.id}>
+                                        Room {r.room_number} ({r.room_type || '—'}) - ₦{Number(r.price_per_night).toLocaleString()}/night
+                                    </option>
+                                ))}
+                            </Select>
+
+                            <Input label="Reason" value={transferReason} onChange={e => setTransferReason(e.target.value)} placeholder="e.g. AC fault, Upgrade" className="mt-2" />
+                            <div className="flex gap-2 mt-2">
+                                <Button variant="secondary" onClick={() => setShowTransferRoom(false)}>Cancel</Button>
+                                <Button onClick={handleTransferRoom} disabled={loading || !selectedNewRoomId}>Confirm Transfer</Button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+
                 {['admin', 'manager', 'supervisor', 'front_desk'].includes(role || '') && (
                     <div className="border-t pt-4 mt-4">
                         <h4 className="font-bold text-red-600 mb-2">Danger Zone</h4>
@@ -304,21 +624,47 @@ export default function GuestDetailsModal({ isOpen, onClose, booking, onUpdate }
             </div>
         )}
 
-        {activeTab === 'financials' && financials && (
+        {activeTab === 'financials' && ledgerSummary && (
             <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-6">
                     <div>
-                        <h4 className="font-bold text-lg mb-4">Breakdown</h4>
-                        <div className="space-y-2 text-sm">
-                            <div className="flex justify-between"><span>Room Cost:</span> <span>{financials.roomCost.toLocaleString()}</span></div>
-                            <div className="flex justify-between text-red-600"><span>Penalties/Fines:</span> <span>+ {financials.penalties.toLocaleString()}</span></div>
-                            <div className="flex justify-between text-green-600"><span>Discounts:</span> <span>- {financials.discounts.toLocaleString()}</span></div>
-                            <div className="flex justify-between font-bold border-t pt-2"><span>Total Due:</span> <span>{financials.totalDue.toLocaleString()}</span></div>
-                            <div className="flex justify-between text-blue-600"><span>Paid:</span> <span>- {financials.payments.toLocaleString()}</span></div>
+                        <h4 className="font-bold text-lg mb-4">Ledger Summary</h4>
+                        <div className="space-y-2 text-sm bg-gray-50 p-4 rounded-lg">
+                            <div className="flex justify-between"><span>Total Charges:</span> <span>₦{ledgerSummary.totalCharges.toLocaleString()}</span></div>
+                            <div className="flex justify-between text-green-600"><span>Total Payments:</span> <span>- ₦{ledgerSummary.totalPayments.toLocaleString()}</span></div>
                             <div className="flex justify-between font-bold text-xl border-t pt-2 mt-2">
                                 <span>Balance:</span> 
-                                <span className={financials.balance > 0 ? 'text-red-600' : 'text-green-600'}>{financials.balance.toLocaleString()}</span>
+                                <span className={ledgerSummary.balance > 0 ? 'text-red-600' : 'text-green-600'}>₦{ledgerSummary.balance.toLocaleString()}</span>
                             </div>
+                        </div>
+
+                        <h4 className="font-bold text-sm mt-6 mb-2 text-gray-500 uppercase">Transaction History</h4>
+                        <div className="border rounded-lg overflow-hidden text-xs">
+                           <table className="w-full text-left">
+                               <thead className="bg-gray-100 text-gray-600">
+                                   <tr>
+                                       <th className="p-2">Date</th>
+                                       <th className="p-2">Description</th>
+                                       <th className="p-2 text-right">Amount</th>
+                                   </tr>
+                               </thead>
+                               <tbody className="divide-y">
+                                   {ledgerEntries.map((entry: LedgerEntry) => (
+                                       <tr key={entry.id} className="hover:bg-gray-50">
+                                           <td className="p-2 text-gray-500">{format(new Date(entry.date), 'MMM d, HH:mm')}</td>
+                                           <td className="p-2">
+                                               <span className={`px-1.5 py-0.5 rounded text-[10px] mr-2 ${entry.type === 'debit' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                                                   {entry.category}
+                                               </span>
+                                               {entry.description}
+                                           </td>
+                                           <td className={`p-2 text-right font-medium ${entry.type === 'debit' ? 'text-gray-900' : 'text-green-600'}`}>
+                                               {entry.type === 'credit' ? '-' : ''}₦{entry.amount.toLocaleString()}
+                                           </td>
+                                       </tr>
+                                   ))}
+                               </tbody>
+                           </table>
                         </div>
                     </div>
                     <div className="space-y-4">

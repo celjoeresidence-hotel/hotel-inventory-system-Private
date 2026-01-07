@@ -54,6 +54,7 @@ export default function AdminDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [interruptedSummary, setInterruptedSummary] = useState<{ pending: number; totalCredit: number; resumed: number; refunded: number }>({ pending: 0, totalCredit: 0, resumed: 0, refunded: 0 });
   
   // Date Filter State
   const [dateRange, setDateRange] = useState<{ start: string; end: string }>(() => {
@@ -137,7 +138,10 @@ export default function AdminDashboard() {
         activeGuestRes,
         roomsRes,
         opsRes,
-        riskRes
+        riskRes,
+        interruptedRes,
+        refundsRes,
+        resumedRes
       ] = await Promise.all([
         // 1. Financials (Approved records in date range)
         client.from('operational_records')
@@ -182,10 +186,33 @@ export default function AdminDashboard() {
 
         // 6. Risk (Rejected & Cancelled)
         client.from('operational_records')
-            .select('*')
-            .or('status.eq.rejected,deleted_at.not.is.null')
-            .gte('created_at', dateRange.start)
-            .lte('created_at', dateRange.end + 'T23:59:59')
+          .select('*')
+          .or('status.eq.rejected,deleted_at.not.is.null')
+          .gte('created_at', dateRange.start)
+          .lte('created_at', dateRange.end + 'T23:59:59')
+        ,
+        // 7. Interrupted Stays Credits
+        client.from('operational_records')
+          .select('id, data')
+          .eq('entity_type', 'front_desk')
+          .is('deleted_at', null)
+          .filter('data->>type', 'eq', 'interrupted_stay_credit'),
+        // 8. Refunds from credits
+        client.from('operational_records')
+          .select('id, data, financial_amount, created_at')
+          .eq('entity_type', 'front_desk')
+          .is('deleted_at', null)
+          .filter('data->>type', 'eq', 'refund_record')
+          .gte('created_at', dateRange.start)
+          .lte('created_at', dateRange.end + 'T23:59:59'),
+        // 9. Resumed bookings marked
+        client.from('operational_records')
+          .select('id, data, created_at')
+          .eq('entity_type', 'front_desk')
+          .is('deleted_at', null)
+          .filter('data->>type', 'eq', 'room_booking')
+          .gte('created_at', dateRange.start)
+          .lte('created_at', dateRange.end + 'T23:59:59')
       ]);
 
       if (revenueRes.error) throw revenueRes.error;
@@ -259,6 +286,11 @@ export default function AdminDashboard() {
       const rejected = riskRes.data?.filter(r => r.status === 'rejected') || [];
       const cancelled = riskRes.data?.filter(r => r.deleted_at !== null) || [];
 
+      const pendingInterrupted = (interruptedRes.data || []).filter((r: any) => Boolean(r.data?.can_resume));
+      const totalPausedCredit = (interruptedRes.data || []).reduce((sum: number, r: any) => sum + Number(r.data?.credit_remaining || 0), 0);
+      const resumedThisPeriod = (resumedRes.data || []).filter((r: any) => Boolean(r.data?.meta?.resumed_from_interruption)).length;
+      const cancelledOrRefundedCredits = (refundsRes.data || []).length;
+
       setData({
         snapshot: {
           revenue: totalRevenue,
@@ -283,6 +315,12 @@ export default function AdminDashboard() {
             rejected,
             cancelled
         }
+      });
+      setInterruptedSummary({
+        pending: pendingInterrupted.length,
+        totalCredit: totalPausedCredit,
+        resumed: resumedThisPeriod,
+        refunded: cancelledOrRefundedCredits
       });
 
     } catch (err: any) {
@@ -329,6 +367,9 @@ export default function AdminDashboard() {
             <button onClick={() => fetchDashboardData()} className="p-1 hover:bg-gray-100 rounded">
                 <IconFilter size={18} className="text-gray-500" />
             </button>
+            <button onClick={() => window.print()} className="ml-2 px-3 py-1.5 rounded bg-gray-900 text-white text-sm hover:bg-gray-800">
+                Print Interrupted Report
+            </button>
         </div>
       </div>
 
@@ -340,6 +381,16 @@ export default function AdminDashboard() {
         <StatCard label="Active Guests" value={data.snapshot.active_guests} icon={<IconUsers />} color="purple" />
         <StatCard label="Pending Approvals" value={data.snapshot.pending_approvals} icon={<IconHistory />} color="orange" onClick={fetchPendingDetails} />
       </div>
+
+      {/* Interrupted Stays Reporting */}
+      <Section title="Interrupted Stays & Credits" icon={<IconAlertCircle />}>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <StatCard label="Pending Interrupted Stays" value={interruptedSummary.pending} icon={<IconAlertCircle />} color="orange" />
+          <StatCard label="Total Paused Credits" value={formatCurrency(interruptedSummary.totalCredit)} icon={<IconCurrencyDollar />} color="green" />
+          <StatCard label="Resumed This Period" value={interruptedSummary.resumed} icon={<IconCheckSquare />} color="blue" />
+          <StatCard label="Refunded Credits" value={interruptedSummary.refunded} icon={<IconHistory />} color="red" />
+        </div>
+      </Section>
 
       {/* 2. Financial Intelligence */}
       {['admin', 'manager'].includes(role || '') && (
@@ -596,6 +647,7 @@ function StatCard({ label, value, icon, color, onClick }: any) {
         indigo: 'bg-indigo-50 text-indigo-600 border-indigo-500',
         purple: 'bg-purple-50 text-purple-600 border-purple-500',
         orange: 'bg-orange-50 text-orange-600 border-orange-500',
+        red: 'bg-red-50 text-red-600 border-red-500',
     };
 
     return (

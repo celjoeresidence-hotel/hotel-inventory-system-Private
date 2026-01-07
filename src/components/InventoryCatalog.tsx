@@ -66,184 +66,35 @@ export default function InventoryCatalog() {
     setLoading(true);
     try {
       if (!canView || !supabase) return;
-      // Fetch approved, non-deleted config records directly from operational_records and dedupe latest per original_id
-      const [catRes, colRes, itemRes] = await Promise.all([
-        supabase
-          .from('operational_records')
-          .select('id, data, original_id, version_no, created_at, status, deleted_at')
-          .eq('status', 'approved')
-          .is('deleted_at', null)
-          .eq('entity_type', 'storekeeper')
-          .filter('data->>type', 'eq', 'config_category')
-          .order('created_at', { ascending: false }),
-        supabase
-          .from('operational_records')
-          .select('id, data, original_id, version_no, created_at, status, deleted_at')
-          .eq('status', 'approved')
-          .is('deleted_at', null)
-          .eq('entity_type', 'storekeeper')
-          .filter('data->>type', 'eq', 'config_collection')
-          .order('created_at', { ascending: false }),
-        supabase
-          .from('operational_records')
-          .select('id, data, original_id, version_no, created_at, status, deleted_at')
-          .eq('status', 'approved')
-          .is('deleted_at', null)
-          .eq('entity_type', 'storekeeper')
-          .filter('data->>type', 'eq', 'config_item')
-          .order('created_at', { ascending: false }),
-      ]);
 
-      if (catRes.error) { setError(catRes.error.message); return; }
-      if (colRes.error) { setError(colRes.error.message); return; }
-      if (itemRes.error) { setError(itemRes.error.message); return; }
+      const { data, error } = await supabase
+        .from('inventory_catalog_view')
+        .select('*')
+        .order('category', { ascending: true })
+        .order('collection_name', { ascending: true })
+        .order('item_name', { ascending: true });
 
-      const dedupLatest = (rows: any[]) => {
-        const seen = new Set<string>();
-        const out: any[] = [];
-        for (const r of rows ?? []) {
-          const oid = String(r?.original_id ?? r?.id ?? '');
-          if (!oid) continue;
-          if (seen.has(oid)) continue;
-          seen.add(oid);
-          out.push(r);
-        }
-        return out;
-      };
+      if (error) throw error;
 
-      const categoriesRaw = dedupLatest(catRes.data ?? []).map((r: any) => ({
-        name: String(r?.data?.category_name ?? r?.data?.category ?? ''),
-        active: (r?.data?.active ?? true) !== false,
-      })).filter((c: any) => c.name);
-
-      const collectionsRaw = dedupLatest(colRes.data ?? []).map((r: any) => ({
-        name: String(r?.data?.collection_name ?? ''),
-        category: String(r?.data?.category_name ?? r?.data?.category ?? ''),
-        active: (r?.data?.active ?? true) !== false,
-      })).filter((c: any) => c.name && c.category);
-
-      const itemsRaw = dedupLatest(itemRes.data ?? []).map((r: any) => ({
-        item_name: String(r?.data?.item_name ?? ''),
-        unit: r?.data?.unit ?? null,
-        category: String(r?.data?.category_name ?? r?.data?.category ?? ''),
-        collection_name: String(r?.data?.collection_name ?? ''),
-        active: (r?.data?.active ?? true) !== false,
-      })).filter((it: any) => it.item_name && it.category && it.collection_name);
-
-      // Compute current stock from latest approved opening_stock per item PLUS transactions
-      const itemNames = Array.from(new Set(itemsRaw.map((i: any) => i.item_name)));
-      let stockMap = new Map<string, number>();
-      if (itemNames.length > 0) {
-        // 1. Get latest opening stock
-        const stocksRes = await supabase
-          .from('operational_records')
-          .select('id, data, created_at')
-          .eq('status', 'approved')
-          .is('deleted_at', null)
-          .eq('entity_type', 'storekeeper')
-          .filter('data->>type', 'eq', 'opening_stock')
-          .in('data->>item_name', itemNames)
-          .order('created_at', { ascending: false }); // We'll process locally to find latest per item
-        
-        // 2. Get all restock transactions
-        const restockRes = await supabase
-          .from('operational_records')
-          .select('id, data, original_id, version_no, created_at')
-          .eq('status', 'approved')
-          .is('deleted_at', null)
-          .eq('entity_type', 'storekeeper')
-          .filter('data->>type', 'eq', 'stock_restock')
-          .in('data->>item_name', itemNames)
-          .order('created_at', { ascending: false });
-
-        // 3. Get all issued transactions
-        const issuedRes = await supabase
-          .from('operational_records')
-          .select('id, data, original_id, version_no, created_at')
-          .eq('status', 'approved')
-          .is('deleted_at', null)
-          .eq('entity_type', 'storekeeper')
-          .filter('data->>type', 'eq', 'stock_issued')
-          .in('data->>item_name', itemNames)
-          .order('created_at', { ascending: false });
-
-        if (stocksRes.error) {
-          setError(stocksRes.error.message);
-        } else {
-          const latestOpeningMap = new Map<string, { qty: number; date: Date }>();
-          
-          // Find latest opening stock per item
-          for (const row of (stocksRes.data ?? [])) {
-            const name = String(row?.data?.item_name ?? '');
-            if (!name) continue;
-            // Prefer data.date (business date) if available, else created_at
-            const dateStr = row.data?.date ?? row.created_at;
-            const date = new Date(dateStr);
-            if (!latestOpeningMap.has(name) || date > latestOpeningMap.get(name)!.date) {
-              const qty = typeof row?.data?.quantity === 'number' ? row.data.quantity : Number(row?.data?.quantity ?? 0);
-              latestOpeningMap.set(name, { qty: Number.isFinite(qty) ? qty : 0, date });
-            }
-          }
-
-          // Initialize stockMap with opening stock
-          for (const [name, val] of latestOpeningMap.entries()) {
-            stockMap.set(name, val.qty);
-          }
-
-          // Deduplicate restock transactions (handle edits/versions)
-          const uniqueRestocks = dedupLatest(restockRes.data ?? []);
-          // Add restocks that happened AFTER the opening stock record
-          for (const row of uniqueRestocks) {
-            const name = String(row?.data?.item_name ?? '');
-            if (!name) continue;
-            const rDateStr = row.data?.date ?? row.created_at;
-            const rDate = new Date(rDateStr);
-            const opening = latestOpeningMap.get(name);
-            // If no opening record, assume 0 start (or include all). If opening record exists, only include transactions after it.
-            if (!opening || rDate >= opening.date) {
-              const qty = typeof row?.data?.quantity === 'number' ? row.data.quantity : Number(row?.data?.quantity ?? 0);
-              const current = stockMap.get(name) ?? 0;
-              stockMap.set(name, current + qty);
-            }
-          }
-
-          // Deduplicate issued transactions
-          const uniqueIssued = dedupLatest(issuedRes.data ?? []);
-          // Subtract issued that happened AFTER the opening stock record
-          for (const row of uniqueIssued) {
-            const name = String(row?.data?.item_name ?? '');
-            if (!name) continue;
-            const iDateStr = row.data?.date ?? row.created_at;
-            const iDate = new Date(iDateStr);
-            const opening = latestOpeningMap.get(name);
-            if (!opening || iDate >= opening.date) {
-              const qty = typeof row?.data?.quantity === 'number' ? row.data.quantity : Number(row?.data?.quantity ?? 0);
-              const current = stockMap.get(name) ?? 0;
-              stockMap.set(name, Math.max(0, current - qty));
-            }
-          }
-        }
-      }
-
-      // Build Category → Collection → Items hierarchy (include both active and inactive; show status badge)
+      // Build Category → Collection → Items hierarchy
       const catMap = new Map<string, { active: boolean; colMap: Map<string, { active: boolean; items: CatalogItem[] }> }>();
 
-      for (const cat of categoriesRaw) {
-        if (!catMap.has(cat.name)) catMap.set(cat.name, { active: Boolean(cat.active), colMap: new Map() });
-      }
-      for (const col of collectionsRaw) {
-        if (!catMap.has(col.category)) catMap.set(col.category, { active: true, colMap: new Map() });
-        const entry = catMap.get(col.category)!;
-        if (!entry.colMap.has(col.name)) entry.colMap.set(col.name, { active: Boolean(col.active), items: [] });
-      }
-      for (const it of itemsRaw) {
-        if (!catMap.has(it.category)) catMap.set(it.category, { active: true, colMap: new Map() });
-        const entry = catMap.get(it.category)!;
-        if (!entry.colMap.has(it.collection_name)) entry.colMap.set(it.collection_name, { active: true, items: [] });
-        const colEntry = entry.colMap.get(it.collection_name)!;
-        const current_stock = stockMap.has(it.item_name) ? stockMap.get(it.item_name)! : null;
-        const active = entry.active && colEntry.active && (it.active ?? true);
-        colEntry.items.push({ item_name: it.item_name, unit: it.unit ?? null, current_stock, active });
+      for (const row of (data ?? [])) {
+        const catName = row.category;
+        const colName = row.collection_name;
+        
+        if (!catMap.has(catName)) catMap.set(catName, { active: true, colMap: new Map() });
+        const entry = catMap.get(catName)!;
+        
+        if (!entry.colMap.has(colName)) entry.colMap.set(colName, { active: true, items: [] });
+        const colEntry = entry.colMap.get(colName)!;
+        
+        colEntry.items.push({
+          item_name: row.item_name,
+          unit: row.unit,
+          current_stock: Number(row.current_stock ?? 0),
+          active: true
+        });
       }
 
       const catList: CatalogCategory[] = Array.from(catMap.entries()).map(([catName, { active, colMap }]) => ({
@@ -252,7 +103,7 @@ export default function InventoryCatalog() {
         collections: Array.from(colMap.entries()).map(([colName, { active: colActive, items }]) => ({
           name: colName,
           active: colActive,
-          items: items.sort((a, b) => a.item_name.localeCompare(b.item_name)),
+          items: items // Already sorted by query
         })).sort((a, b) => a.name.localeCompare(b.name)),
       })).sort((a, b) => a.name.localeCompare(b.name));
       
@@ -260,10 +111,13 @@ export default function InventoryCatalog() {
       setLastUpdated(new Date());
 
       // Default expand all categories initially if first load
-      if (categories.length === 0) {
+      if (categories.length === 0 && catList.length > 0) {
         setExpandedCategories(new Set(catList.map(c => c.name)));
         setExpandedCollections(new Set());
       }
+    } catch (err: any) {
+      console.error('Error fetching catalog:', err);
+      setError(err.message);
     } finally {
       setLoading(false);
     }

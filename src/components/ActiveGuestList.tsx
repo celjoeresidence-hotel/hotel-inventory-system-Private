@@ -2,18 +2,20 @@ import { useState } from 'react';
 import type { BookingWithId } from '../hooks/useFrontDesk';
 import { Button } from './ui/Button';
 import { Badge } from './ui/Badge';
-import { IconSearch, IconLogOut, IconEye } from './ui/Icons';
+import { IconSearch, IconLogOut, IconEye, IconAlertCircle } from './ui/Icons';
 import CheckOutModal from './CheckOutModal';
 import GuestDetailsModal from './GuestDetailsModal';
+import type { RoomStatus } from '../types/frontDesk';
 
 interface ActiveGuestListProps {
   bookings: BookingWithId[];
+  rooms: RoomStatus[];
   loading: boolean;
   onRefresh: () => void;
   readOnly?: boolean;
 }
 
-export default function ActiveGuestList({ bookings, loading, onRefresh, readOnly }: ActiveGuestListProps) {
+export default function ActiveGuestList({ bookings, rooms = [], loading, onRefresh, readOnly }: ActiveGuestListProps) {
   const [search, setSearch] = useState('');
   const [selectedBooking, setSelectedBooking] = useState<BookingWithId | null>(null);
   const [detailsBooking, setDetailsBooking] = useState<BookingWithId | null>(null);
@@ -71,6 +73,9 @@ export default function ActiveGuestList({ bookings, loading, onRefresh, readOnly
               ) : (
                 filtered.map((booking) => {
                   const isOverdue = booking.data.stay?.check_out && new Date(booking.data.stay.check_out) < new Date(new Date().toDateString());
+                  const room = rooms.find((r: RoomStatus) => r.room_number === booking.room_number);
+                  const isHousekeepingCleared = room?.housekeeping_status === 'clean';
+                  
                   return (
                     <tr key={booking.id} className="hover:bg-gray-50/50 transition-colors">
                       <td className="px-6 py-4">
@@ -99,11 +104,16 @@ export default function ActiveGuestList({ bookings, loading, onRefresh, readOnly
                         </div>
                       </td>
                       <td className="px-6 py-4 font-medium">
-                        {booking.data.payment?.balance && booking.data.payment.balance > 0 ? (
-                          <span className="text-red-600">₦{booking.data.payment.balance.toLocaleString()}</span>
-                        ) : (
-                          <span className="text-green-600">Paid</span>
-                        )}
+                        {(() => {
+                          const balance = booking.data.payment?.balance ?? 0;
+                          if (balance > 0) {
+                            return <span className="text-red-600 font-medium">₦{balance.toLocaleString()}</span>;
+                          } else if (balance < 0) {
+                            return <span className="text-green-600 font-medium">Credit: ₦{Math.abs(balance).toLocaleString()}</span>;
+                          } else {
+                            return <span className="text-gray-500 font-medium">Settled</span>;
+                          }
+                        })()}
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex justify-end gap-2">
@@ -116,14 +126,25 @@ export default function ActiveGuestList({ bookings, loading, onRefresh, readOnly
                                 <IconEye className="w-4 h-4"/>
                             </Button>
                             {!readOnly && (
-                                <Button
-                                size="sm"
-                                onClick={() => setSelectedBooking(booking)}
-                                className="gap-2"
-                                >
-                                <IconLogOut className="w-4 h-4" />
-                                Check Out
-                                </Button>
+                                <div className="relative group">
+                                  <Button
+                                    size="sm"
+                                    onClick={() => setSelectedBooking(booking)}
+                                    className="gap-2"
+                                    disabled={!isHousekeepingCleared}
+                                  >
+                                    <IconLogOut className="w-4 h-4" />
+                                    Check Out
+                                  </Button>
+                                  {!isHousekeepingCleared && (
+                                    <div className="absolute bottom-full right-0 mb-2 w-48 p-2 bg-gray-900 text-white text-xs rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                                      <div className="flex items-center gap-1.5">
+                                        <IconAlertCircle className="w-3 h-3 text-red-400" />
+                                        <span>Housekeeping not cleared ({room?.housekeeping_status || 'unknown'})</span>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
                             )}
                         </div>
                       </td>
@@ -140,6 +161,7 @@ export default function ActiveGuestList({ bookings, loading, onRefresh, readOnly
         isOpen={!!selectedBooking}
         onClose={() => setSelectedBooking(null)}
         booking={selectedBooking}
+        roomStatus={rooms.find(r => r.room_number === selectedBooking?.room_number)}
         onSuccess={() => {
           setSelectedBooking(null);
           onRefresh();
@@ -150,6 +172,7 @@ export default function ActiveGuestList({ bookings, loading, onRefresh, readOnly
         isOpen={!!detailsBooking}
         onClose={() => setDetailsBooking(null)}
         booking={detailsBooking}
+        rooms={rooms}
         onUpdate={() => {
             onRefresh();
         }}

@@ -15,6 +15,8 @@ export interface ReservationData {
   room_type: string;
   check_in_date: string;
   check_out_date: string;
+  start_time?: string;
+  end_time?: string;
   expected_nights: number;
   deposit_amount: number;
   payment_status: 'unpaid' | 'deposit_paid' | 'fully_paid';
@@ -30,20 +32,30 @@ export const generateReservationCode = () => {
   return `RES-${year}-${random}`;
 };
 
+const DEFAULT_START_TIME = '14:00';
+const DEFAULT_END_TIME = '11:00';
+const combineDateTime = (date: string, time?: string) => {
+  const t = (time || '').trim() || DEFAULT_START_TIME;
+  return `${date}T${t}:00`;
+};
+const combineDateTimeEnd = (date: string, time?: string) => {
+  const t = (time || '').trim() || DEFAULT_END_TIME;
+  return `${date}T${t}:00`;
+};
+
 export const checkDoubleBooking = async (
   client: SupabaseClient,
   roomId: string,
   checkIn: string,
   checkOut: string,
+  startTime?: string,
+  endTime?: string,
   excludeReservationId?: string
 ): Promise<{ isConflict: boolean; conflictingRecord?: any }> => {
-  // Helper to check overlap using robust string comparison (YYYY-MM-DD)
+  const reqStart = combineDateTime(checkIn, startTime);
+  const reqEnd = combineDateTimeEnd(checkOut, endTime);
   const isOverlap = (startA: string, endA: string, startB: string, endB: string) => {
-    const sA = startA.split('T')[0];
-    const eA = endA.split('T')[0];
-    const sB = startB.split('T')[0];
-    const eB = endB.split('T')[0];
-    return sA < eB && eA > sB;
+    return startA < endB && endA > startB;
   };
 
   // 1. Check Active Stays (room_booking)
@@ -62,7 +74,9 @@ export const checkDoubleBooking = async (
   const conflictStay = stays?.find(r => {
     const rStart = r.data.stay?.check_in;
     const rEnd = r.data.stay?.check_out;
-    return rStart && rEnd && isOverlap(checkIn, checkOut, rStart, rEnd);
+    const s = rStart ? `${rStart}T00:00:00` : '';
+    const e = rEnd ? `${rEnd}T23:59:59` : '';
+    return s && e && isOverlap(reqStart, reqEnd, s, e);
   });
 
   if (conflictStay) return { isConflict: true, conflictingRecord: conflictStay };
@@ -88,7 +102,9 @@ export const checkDoubleBooking = async (
   const conflictRes = reservations?.find(r => {
     const rStart = r.data.check_in_date;
     const rEnd = r.data.check_out_date;
-    return rStart && rEnd && isOverlap(checkIn, checkOut, rStart, rEnd);
+    const s = rStart ? combineDateTime(rStart, r.data.start_time) : '';
+    const e = rEnd ? combineDateTimeEnd(rEnd, r.data.end_time) : '';
+    return s && e && isOverlap(reqStart, reqEnd, s, e);
   });
 
   if (conflictRes) return { isConflict: true, conflictingRecord: conflictRes };
@@ -134,7 +150,8 @@ export const convertReservationToStay = async (
       check_in: reservation.data.check_in_date,
       check_out: reservation.data.check_out_date,
       adults: 1, // Default
-      children: 0
+      children: 0,
+      status: 'checked_in'
     },
     meta: {
       source_reservation_id: reservation.id,
@@ -185,6 +202,7 @@ export const convertReservationToStay = async (
       data: {
         ...reservation.data,
         status: 'converted',
+        reservation_status: 'checked_in',
         converted_to_booking_id: newBooking.id
       }
     })

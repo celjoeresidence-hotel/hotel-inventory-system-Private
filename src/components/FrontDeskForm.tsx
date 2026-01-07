@@ -282,7 +282,14 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
       type: 'room_booking',
       front_desk_staff_id: frontDeskStaffId,
       guest: { full_name, phone, email: email || undefined, id_reference: id_reference || undefined },
-      stay: { room_id, check_in, check_out, adults, children },
+      stay: { 
+        room_id, 
+        check_in, 
+        check_out, 
+        adults, 
+        children,
+        status: 'checked_in'
+      },
       pricing: { 
         room_rate, 
         nights, 
@@ -324,7 +331,14 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
         type: 'guest_record',
         front_desk_staff_id: frontDeskStaffId,
         guest: { full_name, phone, email: email || undefined, id_reference: id_reference || undefined },
-        stay: { room_id, check_in, check_out, adults, children },
+        stay: { 
+          room_id, 
+          check_in, 
+          check_out, 
+          adults, 
+          children,
+          status: 'checked_in'
+        },
         meta: { notes: notes || null, created_at_local },
       };
 

@@ -121,7 +121,7 @@ BEGIN
     )
   GROUP BY l.item_name;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 GRANT EXECUTE ON FUNCTION public.get_inventory_opening_at_date TO authenticated;
 
@@ -162,6 +162,7 @@ global_stock AS (
     item_name,
     SUM(quantity_change) AS current_stock
   FROM public.v_inventory_ledger
+  WHERE department = 'STORE'
   GROUP BY item_name
 )
 SELECT
@@ -209,7 +210,7 @@ BEGIN
 
   RETURN COALESCE(_global_stock, 0);
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 GRANT EXECUTE ON FUNCTION public.get_expected_opening_stock TO authenticated;
 
@@ -229,7 +230,7 @@ BEGIN
     FROM public.inventory_catalog_view i;
   END IF;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 GRANT EXECUTE ON FUNCTION public.get_expected_opening_stock_batch TO authenticated;
 
@@ -383,7 +384,7 @@ BEGIN
     ORDER BY i.item_name;
   END IF;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 GRANT EXECUTE ON FUNCTION public.get_daily_stock_sheet TO authenticated;
 
