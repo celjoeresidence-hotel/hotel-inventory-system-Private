@@ -123,7 +123,7 @@ export default function Reports() {
           
           let totalRestocked = 0;
           let totalIssued = 0;
-          let totalDiscarded = 0;
+          const totalDiscarded = 0;
           
           events.forEach((e: any) => {
             const item = e.item_name;
@@ -166,8 +166,8 @@ export default function Reports() {
 
           // Daily Details Logic
           let dailyEvs: any[] = [];
-          let dailyOpenMap: Record<string, number> = {};
-          let anomaliesList: string[] = [];
+          const dailyOpenMap: Record<string, number> = {};
+          const anomaliesList: string[] = [];
 
           if (queryMode === 'day') {
              dailyEvs = events.map((e: any) => ({

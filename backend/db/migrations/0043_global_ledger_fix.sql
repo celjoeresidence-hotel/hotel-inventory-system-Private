@@ -298,6 +298,41 @@ BEGIN
 END
 $$;
 
+-- =================================================================
+-- 6. Performance: Bulk Submit RPC for Storekeeper Daily Records
+-- =================================================================
+-- Accepts an array of storekeeper record objects and inserts them
+-- in a single transaction to reduce roundtrips and trigger overhead.
+CREATE OR REPLACE FUNCTION public.submit_storekeeper_daily(_records jsonb)
+RETURNS TABLE (id uuid) AS $$
+DECLARE
+  rec jsonb;
+  v_id uuid;
+  v_status public.approval_status;
+  v_amount numeric;
+  v_data jsonb;
+BEGIN
+  IF _records IS NULL OR jsonb_typeof(_records) <> 'array' THEN
+    RAISE EXCEPTION 'Payload must be a JSON array';
+  END IF;
+
+  FOR rec IN SELECT jsonb_array_elements(_records)
+  LOOP
+    v_data := rec->'data';
+    v_status := COALESCE((rec->>'status')::public.approval_status, 'pending');
+    v_amount := COALESCE((rec->>'financial_amount')::numeric, 0);
+
+    INSERT INTO public.operational_records(entity_type, data, financial_amount, submitted_by, status)
+    VALUES ('storekeeper', v_data, v_amount, public.app_current_user_id(), v_status)
+    RETURNING id INTO v_id;
+
+    RETURN QUERY SELECT v_id;
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+GRANT EXECUTE ON FUNCTION public.submit_storekeeper_daily(jsonb) TO authenticated;
+
 -- Also approve in BEFORE INSERT to avoid a follow-up UPDATE per row
 -- This reduces write amplification and avoids timeouts for bulk submissions.
 CREATE OR REPLACE FUNCTION public.operational_records_before_insert_auto_approve_closing_snapshot()

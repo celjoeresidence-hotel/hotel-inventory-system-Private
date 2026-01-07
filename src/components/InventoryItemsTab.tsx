@@ -242,7 +242,9 @@ export default function InventoryItemsTab() {
         } else if (list.length === 0) {
             setFilterCollection('');
         }
-      } catch {}
+      } catch (e) {
+        console.warn('Fetch collections for filter failed');
+      }
     }
     fetchCollectionsForFilter();
   }, [filterCategoryName, canView]);
@@ -298,7 +300,7 @@ export default function InventoryItemsTab() {
         })).filter((it) => it.item_name);
 
         // Fetch current stock from authoritative view
-        let stockMap = new Map<string, number>();
+        const stockMap = new Map<string, number>();
         try {
             const { data: stockData, error: stockErr } = await supabase
                 .from('inventory_catalog_view')

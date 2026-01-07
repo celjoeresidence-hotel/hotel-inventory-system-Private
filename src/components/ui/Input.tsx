@@ -1,4 +1,4 @@
-import { type InputHTMLAttributes, forwardRef } from 'react';
+import { type InputHTMLAttributes, forwardRef, useId } from 'react';
 
 export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
@@ -9,7 +9,8 @@ export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
   ({ className = '', label, error, helperText, fullWidth, id, ...props }, ref) => {
-    const inputId = id || props.name || Math.random().toString(36).substr(2, 9);
+    const reactId = useId();
+    const inputId = id || props.name || reactId;
     
     return (
       <div className={`ui-input-wrapper ${fullWidth ? 'w-full' : ''} ${className}`}>

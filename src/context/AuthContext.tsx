@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, useRef } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
 import type { Session, User } from '@supabase/supabase-js';
 
@@ -46,6 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profileError, setProfileError] = useState<string | null>(null);
   const lastToken = useRef<string | undefined>(undefined);
   const lastRefresh = useRef<number>(0);
+  const refreshSessionRef = useRef<(() => Promise<boolean>) | null>(null);
 
   const isConfigured = useMemo(() => Boolean(isSupabaseConfigured && supabase), []);
 
@@ -57,7 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Only refresh if more than 30 seconds have passed since last refresh
         if (now - lastRefresh.current > 30000) {
           lastRefresh.current = now;
-          refreshSession?.();
+          refreshSessionRef.current?.();
         }
       }
     }
@@ -211,11 +212,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Attempt to sign out from the server
       const { error } = await supabase!.auth.signOut();
       if (error) throw error;
-    } catch (e: any) {
-      // Ignore network errors or aborts during logout as we're clearing local state anyway
-      const isNetworkError = e?.message?.includes('network') || e?.message?.includes('abort') || e?.message?.includes('fetch');
-      if (!isNetworkError && typeof e?.message === 'string') {
-        console.warn('Logout warning:', e.message);
+    } catch (e: unknown) {
+      const message = typeof e === 'object' && e && 'message' in e ? String((e as { message?: string }).message) : undefined;
+      const isNetworkError = message ? (message.includes('network') || message.includes('abort') || message.includes('fetch')) : false;
+      if (!isNetworkError && message) {
+        console.warn('Logout warning:', message);
       }
     }
     setSession(null);
@@ -231,7 +232,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const isManager = role === 'manager';
   const isSupervisor = role === 'supervisor';
 
-  async function refreshSession(): Promise<boolean> {
+  const refreshSession = useCallback(async (): Promise<boolean> => {
     if (!isConfigured || !supabase) return false;
     try {
       const { data, error } = await supabase.auth.getSession();
@@ -272,7 +273,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       return false;
     }
-  }
+  }, [isConfigured]);
+
+  useEffect(() => {
+    refreshSessionRef.current = refreshSession;
+  }, [refreshSession]);
 
   async function ensureActiveSession(): Promise<boolean> {
     const ok = await refreshSession();

@@ -256,7 +256,9 @@ export default function SupervisorInbox() {
             rmap[String(r.id)] = { room_number: String(r.room_number), room_name: r.room_name ?? null };
           }
           setRoomsMap(rmap);
-        } catch {}
+        } catch {
+          console.warn('Room prefetch failed');
+        }
       } finally {
         setLoadingList(false);
       }

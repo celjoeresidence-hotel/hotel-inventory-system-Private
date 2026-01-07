@@ -103,7 +103,17 @@ export default function CreateReservationModal({ isOpen, onClose, onSuccess }: C
       setCheckingConflict(false);
 
       if (isConflict) {
-        throw new Error(`Room is not available for these dates. Conflict with ${conflictingRecord?.data?.type === 'room_booking' ? 'Active Stay' : 'Existing Reservation'}.`);
+        const conflictType =
+          conflictingRecord &&
+          conflictingRecord.data &&
+          typeof conflictingRecord.data === 'object' &&
+          conflictingRecord.data !== null &&
+          'type' in conflictingRecord.data
+            ? (conflictingRecord.data as { type: string }).type
+            : undefined;
+        throw new Error(
+          `Room is not available for these dates. Conflict with ${conflictType === 'room_booking' ? 'Active Stay' : 'Existing Reservation'}.`
+        );
       }
 
       // 3. Prepare Data

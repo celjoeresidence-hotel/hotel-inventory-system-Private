@@ -1,1 +1,1 @@
-console.log(" Test script created.\)
+console.log("Test script created.");

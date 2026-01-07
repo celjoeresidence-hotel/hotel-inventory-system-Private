@@ -130,7 +130,9 @@ export default function BarStockForm() {
               .map((r: any) => ({ name: String(r?.category_name ?? ''), active: true }))
               .filter((c: { name: string; active: boolean }) => Boolean(c.name))
           }
-        } catch {}
+        } catch (e) {
+          console.warn('Fetch categories failed');
+        }
 
         if (!cats.length) {
           const { data: catRows, error: catErr } = await supabase
@@ -230,7 +232,9 @@ export default function BarStockForm() {
                     stock_out_db: 0
                     })).filter((it: any) => it.item_name)
                 }
-            } catch {}
+            } catch (e) {
+              console.warn('Legacy fetch failed');
+            }
 
             if (!enriched.length) {
                 // ... fetch from operational_records ...
@@ -334,7 +338,9 @@ export default function BarStockForm() {
               }
             }
           }
-        } catch {}
+        } catch (e) {
+          console.warn('Compute monthly prefetch failed');
+        }
 
         let baseItems: string[] = []
         // Use RPC or fallback
@@ -349,7 +355,9 @@ export default function BarStockForm() {
                }
              }
           }
-        } catch {}
+        } catch (e) {
+          console.warn('list_items_for_category RPC failed');
+        }
         
         if (baseItems.length === 0) {
            baseItems = Array.from(itemConfigMap.keys())

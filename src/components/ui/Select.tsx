@@ -1,4 +1,4 @@
-import { type SelectHTMLAttributes, forwardRef } from 'react';
+import { type SelectHTMLAttributes, forwardRef, useId } from 'react';
 import { IconChevronDown } from './Icons';
 
 export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
@@ -12,7 +12,8 @@ export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(
   ({ className = '', label, error, helperText, fullWidth = true, children, options, placeholder, disabled, ...props }, ref) => {
-    const inputId = props.id || props.name || Math.random().toString(36).substr(2, 9);
+    const reactId = useId();
+    const inputId = props.id || props.name || reactId;
     
     return (
       <div className={`ui-input-wrapper ${fullWidth ? 'w-full' : 'w-auto'} ${className}`}>

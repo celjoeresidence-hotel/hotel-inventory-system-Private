@@ -39,7 +39,7 @@ export default function ReservationList() {
       const client = supabase;
       if (!client) return;
 
-      let query = client
+      const query = client
         .from('operational_records')
         .select('*')
         .eq('entity_type', 'front_desk')

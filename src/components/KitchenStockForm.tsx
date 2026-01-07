@@ -101,7 +101,9 @@ export default function KitchenStockForm() {
               .map((r: any) => ({ name: String(r?.category_name ?? ''), active: true }))
               .filter((c: { name: string; active: boolean }) => Boolean(c.name))
           }
-        } catch {}
+        } catch (e) {
+          console.warn('Fetch categories failed');
+        }
         // Fallback to operational_records if RPC unavailable or returned empty
         if (!cats.length) {
           const { data: catRows, error: catErr } = await supabase
@@ -193,7 +195,9 @@ export default function KitchenStockForm() {
                 })).filter((it: any) => it.item_name)
              }
           }
-        } catch {}
+        } catch (e) {
+          console.warn('Compute monthly prefetch failed');
+        }
         // Fallback to operational_records config_item if RPC unavailable or returned empty
         if (!enriched.length) {
           const { data: itemRows, error: itemErr } = await supabase

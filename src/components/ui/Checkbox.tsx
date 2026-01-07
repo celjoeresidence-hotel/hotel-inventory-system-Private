@@ -1,4 +1,4 @@
-import React, { type InputHTMLAttributes, forwardRef } from 'react';
+import React, { type InputHTMLAttributes, forwardRef, useId } from 'react';
 
 export interface CheckboxProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
@@ -7,7 +7,8 @@ export interface CheckboxProps extends InputHTMLAttributes<HTMLInputElement> {
 
 export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(
   ({ className = '', label, id, indeterminate, ...props }, ref) => {
-    const inputId = id || props.name || Math.random().toString(36).substr(2, 9);
+    const reactId = useId();
+    const inputId = id || props.name || reactId;
     
     return (
       <div className={`flex items-center gap-2 ${className}`}>

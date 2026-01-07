@@ -190,7 +190,7 @@ BEGIN
     f.unit_price,
     f.total_value,
     f.staff_name,
-    f.submitted_by,
+    f.submitted_by::text AS submitted_by,
     (SELECT COUNT(*) FROM filtered)::bigint AS total_count
   FROM filtered f
   ORDER BY f.event_date DESC, f.created_at DESC

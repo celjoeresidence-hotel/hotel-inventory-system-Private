@@ -339,7 +339,7 @@ export const InventoryHistoryModule: React.FC<InventoryHistoryModuleProps> = ({ 
                 </TableRow>
               ) : (
                 records.map((r) => (
-                  <TableRow key={r.record_id} className="hover:bg-gray-50 transition-colors">
+                  <TableRow key={`${r.record_id}-${r.created_at}`} className="hover:bg-gray-50 transition-colors">
                     <TableCell className="whitespace-nowrap font-medium text-gray-700">
                       {new Date(r.event_date).toLocaleDateString()}
                     </TableCell>

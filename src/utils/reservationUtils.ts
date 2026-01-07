@@ -51,7 +51,7 @@ export const checkDoubleBooking = async (
   startTime?: string,
   endTime?: string,
   excludeReservationId?: string
-): Promise<{ isConflict: boolean; conflictingRecord?: any }> => {
+): Promise<{ isConflict: boolean; conflictingRecord?: { id: string; data: unknown } }> => {
   const reqStart = combineDateTime(checkIn, startTime);
   const reqEnd = combineDateTimeEnd(checkOut, endTime);
   const isOverlap = (startA: string, endA: string, startB: string, endB: string) => {
@@ -129,7 +129,7 @@ export const determineInitialStatus = (
 
 export const convertReservationToStay = async (
   client: SupabaseClient,
-  reservation: any,
+  reservation: { id: string; data: ReservationData },
   staffId: string
 ) => {
   // 1. Create Guest Record / Room Booking

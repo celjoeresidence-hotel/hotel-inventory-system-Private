@@ -48,8 +48,8 @@ export function useFrontDesk() {
       const active: BookingWithId[] = [];
       const past: BookingWithId[] = [];
       const checkouts: BookingWithId[] = [];
-      const reservations: any[] = []; // Store reservations
-      const housekeepingReports: any[] = []; // Store housekeeping reports (latest per room used for status)
+      const reservations: Array<{ id: string; status?: string; data: { room_id?: string; check_in_date?: string; check_out_date?: string; start_time?: string; end_time?: string; guest?: { name: string } } }> = [];
+      const housekeepingReports: Array<{ created_at: string; data: { room_id?: string; housekeeping_status?: string } }> = [];
       const checkedOutBookingIds = new Set<string>();
       
       let paymentsToday = 0;
@@ -60,13 +60,13 @@ export function useFrontDesk() {
         const d = rec.data as FrontDeskRecordData;
         
         // Calculate daily payments
-        const recDate = (d as any).date || (d as any).payment_date || (d as any).checkout_date || rec.created_at;
+        const recDate = d.payment?.payment_date || d.checkout?.checkout_date || rec.created_at;
         if (recDate && recDate.startsWith(todayStr)) {
-            if ((d as any).type === 'payment_record') {
-                paymentsToday += Number((d as any).amount || 0);
+            if ((d as unknown as { type?: string }).type === 'payment_record') {
+                paymentsToday += Number((d as unknown as { amount?: number }).amount || 0);
             }
             if (d.type === 'checkout_record') {
-                paymentsToday += Number(d.checkout?.final_payment || (d as any).final_payment || 0);
+                paymentsToday += Number(d.checkout?.final_payment || 0);
             }
         }
 
@@ -76,12 +76,12 @@ export function useFrontDesk() {
             original_id: rec.original_id,
             data: d,
             created_at: rec.created_at,
-            room_number: (d as any).room_number || 'Unknown'
+            room_number: d.room_number || 'Unknown'
           };
           checkouts.push(booking);
 
-          if ((d as any).booking_id) {
-            checkedOutBookingIds.add((d as any).booking_id);
+          if ((d as unknown as { booking_id?: string }).booking_id) {
+            checkedOutBookingIds.add(String((d as unknown as { booking_id?: string }).booking_id));
           }
         }
       });
@@ -101,7 +101,14 @@ export function useFrontDesk() {
       const resumedCreditIds = new Set<string>();
       const refundedCreditIds = new Set<string>();
       recordsData?.forEach((rec) => {
-        const d = rec.data as any;
+        const d = rec.data as FrontDeskRecordData & {
+          type?: string;
+          booking_id?: string;
+          interruption_date?: string;
+          meta?: { resumed_from_interruption?: boolean; source_credit_id?: string };
+          source_credit_id?: string;
+          credit_remaining?: number;
+        };
         if (d?.type === 'stay_extension' && d?.booking_id && d?.extension?.new_check_out) {
           const prev = extensionMap.get(String(d.booking_id));
           const next = String(d.extension.new_check_out);
@@ -125,7 +132,7 @@ export function useFrontDesk() {
         }
         if (
           d?.type === 'interrupted_stay_credit' &&
-          d?.room_number &&
+          (d as unknown as { room_number?: string }).room_number &&
           d?.can_resume === true &&
           String((d?.status || '')).toLowerCase() !== 'resumed' &&
           !resumedCreditIds.has(String(rec.id)) &&
@@ -133,13 +140,13 @@ export function useFrontDesk() {
           Number(d?.credit_remaining || 0) > 0
         ) {
           // Map room id via roomsData later; for now store room_number marker
-          interruptedCreditsByRoom.set(String(d.room_number), true);
+          interruptedCreditsByRoom.set(String((d as unknown as { room_number?: string }).room_number), true);
         }
       });
 
       // Sort bookings & reservations
       recordsData?.forEach((rec) => {
-        const d = rec.data as any; // Use any to support room_reservation
+        const d = rec.data as FrontDeskRecordData; 
         
         // Handle Active Bookings (Stays)
         if (d.type === 'room_booking' && d.stay && d.guest) {
@@ -178,12 +185,19 @@ export function useFrontDesk() {
         
         // Handle Reservations
         if (d.type === 'room_reservation') {
-           reservations.push({ ...rec, data: d });
+           reservations.push({ id: rec.id, status: (rec as { status?: string }).status, data: { 
+             room_id: d.room_id, 
+             check_in_date: d.check_in_date, 
+             check_out_date: d.check_out_date, 
+             start_time: d.start_time, 
+             end_time: d.end_time, 
+             guest: { name: d.guest?.full_name || '' } 
+           } });
         }
 
         // Handle Housekeeping Reports
         if (d.type === 'housekeeping_report') {
-          housekeepingReports.push({ ...rec, data: d });
+          housekeepingReports.push({ created_at: rec.created_at, data: { room_id: d.stay?.room_id as unknown as string, housekeeping_status: (d as unknown as { housekeeping_status?: string }).housekeeping_status } });
         }
       });
 
@@ -261,7 +275,7 @@ export function useFrontDesk() {
           interrupted = Boolean(intEnd && intEnd <= today);
         } else if (reservation) {
           status = 'reserved';
-          current_guest = reservation.data.guest.name;
+          current_guest = reservation.data.guest?.name || '';
           check_out_date = `${reservation.data.check_out_date} ${reservation.data.end_time || '11:00'}`;
         } else {
           // Determine status based on housekeeping/maintenance if not occupied/reserved
@@ -297,7 +311,7 @@ export function useFrontDesk() {
           interrupted,
           pending_resumption,
           upcoming_reservation: upcomingRes ? {
-            guest_name: upcomingRes.data.guest.name,
+            guest_name: upcomingRes.data.guest?.name || '',
             check_in: `${upcomingRes.data.check_in_date} ${upcomingRes.data.start_time || '14:00'}`,
             check_out: `${upcomingRes.data.check_out_date} ${upcomingRes.data.end_time || '11:00'}`
           } : undefined
@@ -306,9 +320,9 @@ export function useFrontDesk() {
 
       setRooms(roomStatusList);
 
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error fetching front desk data:', err);
-      setError(err.message);
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }

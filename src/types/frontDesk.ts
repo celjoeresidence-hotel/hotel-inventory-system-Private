@@ -50,7 +50,21 @@ export interface MetaInfo {
   created_at_local: string; // ISO datetime string
 }
 
-export type FrontDeskRecordType = 'room_booking' | 'checkout_record' | 'guest_record'
+export type FrontDeskRecordType =
+  | 'room_booking'
+  | 'checkout_record'
+  | 'guest_record'
+  | 'room_reservation'
+  | 'housekeeping_report'
+  | 'stay_extension'
+  | 'room_transfer'
+  | 'stay_interruption'
+  | 'refund_record'
+  | 'penalty_fee'
+  | 'payment_record'
+  | 'discount_applied'
+  | 'interrupted_stay_credit'
+  | 'operational_note'
 
 export interface CheckoutData {
   checkout_date: string;
@@ -68,6 +82,12 @@ export interface FrontDeskRecordData {
   pricing?: PricingInfo;
   payment?: PaymentInfo;
   checkout?: CheckoutData; // For checkout records
+  room_id?: string;
+  room_number?: string;
+  check_in_date?: string;
+  check_out_date?: string;
+  start_time?: string;
+  end_time?: string;
   
   // Extension & Transfer Data
   extension?: {
@@ -88,7 +108,7 @@ export interface FrontDeskRecordData {
 
   meta?: MetaInfo;
   // Legacy/Flexible fields
-  [key: string]: any; 
+  [key: string]: unknown; 
 }
 
 export interface RoomStatus {

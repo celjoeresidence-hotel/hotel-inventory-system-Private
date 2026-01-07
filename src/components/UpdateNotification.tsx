@@ -1,6 +1,16 @@
 import { useEffect, useState } from 'react';
 import { Button } from './ui/Button';
 
+interface ElectronAPI {
+  onUpdateAvailable: (cb: () => void) => () => void;
+  onDownloadProgress?: (cb: (info: { percent?: number }) => void) => () => void;
+  onUpdateError?: (cb: (err: string) => void) => () => void;
+  onUpdateDownloaded: (cb: () => void) => () => void;
+  checkForUpdates: () => void;
+  downloadUpdate: () => Promise<void>;
+  quitAndInstall: () => Promise<void>;
+}
+
 export default function UpdateNotification() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [updateDownloaded, setUpdateDownloaded] = useState(false);
@@ -11,7 +21,7 @@ export default function UpdateNotification() {
 
   useEffect(() => {
     // Check if running in Electron
-    const electronAPI = (window as any).electronAPI;
+    const electronAPI = (window as unknown as { electronAPI?: ElectronAPI }).electronAPI;
     if (!electronAPI) return;
 
     // Listen for update available
@@ -23,7 +33,7 @@ export default function UpdateNotification() {
     // Listen for download progress
     let unsubscribeProgress: (() => void) | undefined;
     if (electronAPI.onDownloadProgress) {
-      unsubscribeProgress = electronAPI.onDownloadProgress((info: any) => {
+      unsubscribeProgress = electronAPI.onDownloadProgress((info: { percent?: number }) => {
         if (info && typeof info.percent === 'number') {
           setProgress(Math.round(info.percent));
         }
@@ -64,7 +74,7 @@ export default function UpdateNotification() {
     if (restartCountdown === null) return;
 
     if (restartCountdown === 0) {
-      const electronAPI = (window as any).electronAPI;
+      const electronAPI = (window as unknown as { electronAPI?: ElectronAPI }).electronAPI;
       if (electronAPI) {
         electronAPI.quitAndInstall();
       }
@@ -80,14 +90,14 @@ export default function UpdateNotification() {
 
   const handleDownload = async () => {
     setDownloading(true);
-    const electronAPI = (window as any).electronAPI;
+    const electronAPI = (window as unknown as { electronAPI?: ElectronAPI }).electronAPI;
     if (electronAPI) {
       await electronAPI.downloadUpdate();
     }
   };
 
   const handleRestart = async () => {
-    const electronAPI = (window as any).electronAPI;
+    const electronAPI = (window as unknown as { electronAPI?: ElectronAPI }).electronAPI;
     if (electronAPI) {
       await electronAPI.quitAndInstall();
     }

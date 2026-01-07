@@ -412,36 +412,40 @@ export default function StorekeeperStockForm() {
       if (iInput > 0) {
         records.push({ entity_type: 'storekeeper', data: { type: 'stock_issued', item_name: row.item_name, quantity: iInput, date, staff_name: staffName, notes: note || undefined }, financial_amount: 0 })
       }
-      
-      // EXPLICIT SOURCE OF TRUTH: Submit the calculated Closing Stock as a hard snapshot
-      // This ensures the Inventory Catalog always reflects exactly what the Storekeeper saw/submitted.
-      records.push({ 
-        entity_type: 'storekeeper', 
-        data: { 
-          type: 'daily_closing_stock', 
-          item_name: row.item_name, 
-          quantity: 0, // Not a movement
-          closing_stock: closing, 
-          date, 
-          staff_name: staffName, 
-          notes: note || undefined 
-        }, 
-        financial_amount: 0 
-      })
+      // Submit closing snapshot only if this item had changes
+      if (rInput > 0 || iInput > 0) {
+        records.push({ 
+          entity_type: 'storekeeper', 
+          data: { 
+            type: 'daily_closing_stock', 
+            item_name: row.item_name, 
+            quantity: 0, 
+            closing_stock: closing, 
+            date, 
+            staff_name: staffName, 
+            notes: note || undefined 
+          }, 
+          financial_amount: 0 
+        })
+      }
     }
     if (records.length === 0) { setError('No changes detected to submit.'); return }
     try {
       setSubmitting(true)
       const ok = await (ensureActiveSession?.() ?? Promise.resolve(true))
       if (!ok) { setError('Session expired. Please sign in again to continue.'); setSubmitting(false); return }
-      // Chunk insert to avoid statement timeouts on large submissions
-      const chunkSize = 25
-      for (let i = 0; i < records.length; i += chunkSize) {
-        const batch = records.slice(i, i + chunkSize).map(r => ({ ...r, submitted_by: user?.id ?? null, status: 'pending' }))
-        const { error: insertError } = await supabase
-          .from('operational_records')
-          .insert(batch)
-        if (insertError) { setError(insertError.message); return }
+      const payload = records.map(r => ({ ...r, submitted_by: user?.id ?? null, status: 'pending' }))
+      const { error: rpcError } = await supabase
+        .rpc('submit_storekeeper_daily', { _records: payload })
+      if (rpcError) {
+        const chunkSize = 20
+        for (let i = 0; i < payload.length; i += chunkSize) {
+          const batch = payload.slice(i, i + chunkSize)
+          const { error: insertError } = await supabase
+            .from('operational_records')
+            .insert(batch)
+          if (insertError) { setError(insertError.message); return }
+        }
       }
       setSuccess('Storekeeper daily stock updated.')
       
