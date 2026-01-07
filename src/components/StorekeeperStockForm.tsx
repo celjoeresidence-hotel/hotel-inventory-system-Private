@@ -43,7 +43,7 @@ type MonthlyRow = {
 }
 
 export default function StorekeeperStockForm() {
-  const { role, session, isConfigured, ensureActiveSession, isSupervisor, isManager, isAdmin, user } = useAuth()
+  const { role, session, isConfigured, ensureActiveSession, user } = useAuth()
 
   // Categories and collections
   const [categories, setCategories] = useState<{ name: string; active: boolean }[]>([])
