@@ -157,26 +157,11 @@ function AuditLogInner() {
         // OR: Since this is "Audit Without Fear", maybe we don't need strict config edit filtering for regular history.
         
         if (onlyConfigEdits) {
-             // ... existing logic ...
-             // (Keeping it as is for now to avoid breaking existing logic, but noting the pagination limitation)
-             const storeOps = filtered.filter((r) => r.entity_type === 'storekeeper');
-             const ids = Array.from(new Set(storeOps.map((r) => r.entity_id)));
-             if (ids.length) {
-               const { data: opData, error: opErr } = await supabase
-                 .from('operational_records')
-                 .select('id, data')
-                 .in('id', ids);
-               if (!opErr && opData) {
-                 const typeMap: Record<string, string | undefined> = {};
-                 for (const row of opData as any[]) {
-                   typeMap[String(row.id)] = (row.data?.type ?? row.data?.record_type) as string | undefined;
-                 }
-                 filtered = storeOps.filter((r) => {
-                   const t = (typeMap[r.entity_id] || '').toLowerCase();
-                   return t === 'config_category' || t === 'config_collection' || t === 'config_item' || t === 'opening_stock';
-                 });
-               } else { filtered = []; }
-             } else { filtered = []; }
+             // New Inventory Config Types
+             const newConfigTypes = ['inventory_item', 'inventory_category', 'inventory_collection', 'rooms', 'staff'];
+             
+             // Keep records that are definitely new config types
+             filtered = filtered.filter(r => newConfigTypes.includes(r.entity_type));
         }
 
         setRows(filtered);

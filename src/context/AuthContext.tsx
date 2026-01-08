@@ -50,6 +50,54 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const isConfigured = useMemo(() => Boolean(isSupabaseConfigured && supabase), []);
 
+  const clearState = useCallback(() => {
+    setSession(null);
+    setUser(null);
+    setRole(null);
+    setStaffId(null);
+    setDepartment(null);
+    setFullName(null);
+    setProfileError(null);
+    lastToken.current = undefined;
+  }, []);
+
+  const fetchAndSetProfile = useCallback(async (userId: string) => {
+    const { data: profile, error: pfErr } = await fetchStaffProfile(userId);
+    if (pfErr) {
+      console.warn('Profile fetch error:', pfErr.message);
+      setProfileError(pfErr.message || 'Failed to fetch staff profile');
+    } else if (!profile) {
+      setProfileError('No staff profile row found for this user.');
+    } else {
+      setProfileError(null);
+    }
+    const fetchedRole = (profile?.role as AppRole) ?? null;
+    setRole(fetchedRole);
+    setStaffId(profile?.id ?? null);
+    setDepartment(profile?.department ?? null);
+    setFullName(profile?.full_name ?? null);
+  }, []);
+
+  const processSession = useCallback(async (newSession: Session | null) => {
+    if (!newSession) {
+      clearState();
+      return;
+    }
+
+    // Optimization: Check if token matches to avoid unnecessary updates
+    if (newSession.access_token === lastToken.current) {
+        return;
+    }
+
+    lastToken.current = newSession.access_token;
+    setSession(newSession);
+    setUser(newSession.user);
+
+    if (newSession.user) {
+      await fetchAndSetProfile(newSession.user.id);
+    }
+  }, [clearState, fetchAndSetProfile]);
+
   useEffect(() => {
     // Handle visibility change to prevent aggressive refreshes
     function handleVisibilityChange() {
@@ -75,141 +123,73 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
     let unsubscribe: (() => void) | null = null;
+
     async function init() {
       if (!isConfigured) {
         setLoading(false);
         return;
       }
-      const { data, error } = await supabase!.auth.getSession();
-      if (error) {
-        console.warn('Auth session init error:', error.message);
-        // If the refresh token is invalid, ensure we clear any stale local storage
-        if (error.message.includes('Refresh Token Not Found') || error.message.includes('Invalid Refresh Token')) {
-          await supabase!.auth.signOut().catch(() => {});
-        }
-        setLoading(false);
-        return;
-      }
-      const s = data?.session ?? null;
-      
-      // Initial token tracking
-      lastToken.current = s?.access_token;
 
-      if (mounted) {
-        setSession(s);
-        setUser(s?.user ?? null);
-      }
-      if (s?.user) {
-        const { data: profile, error: pfErr } = await fetchStaffProfile(s.user.id);
-        if (mounted) {
-          if (pfErr) {
-            console.warn('Profile fetch error:', pfErr.message);
-            setProfileError(pfErr.message || 'Failed to fetch staff profile');
-          } else if (!profile) {
-            setProfileError('No staff profile row found for this user.');
-          } else {
-            setProfileError(null);
+      try {
+        const { data, error } = await supabase!.auth.getSession();
+        
+        if (error) {
+          console.warn('Auth session init error:', error.message);
+          // If the refresh token is invalid, ensure we clear any stale local storage
+          if (error.message.includes('Refresh Token Not Found') || error.message.includes('Invalid Refresh Token')) {
+            await supabase!.auth.signOut().catch(() => {});
           }
-          const fetchedRole = (profile?.role as AppRole) ?? null;
-          setRole(fetchedRole);
-          setStaffId(profile?.id ?? null);
-          setDepartment(profile?.department ?? null);
-          setFullName(profile?.full_name ?? null);
+          if (mounted) setLoading(false);
+          return;
         }
-      } else {
-        if (mounted) {
-          setRole(null);
-          setStaffId(null);
-          setDepartment(null);
-          setFullName(null);
-          setProfileError(null);
-        }
-      }
-      if (mounted) setLoading(false);
 
-      const { data: sub } = supabase!.auth.onAuthStateChange(async (_event, newSession) => {
+        if (mounted) {
+           await processSession(data?.session ?? null);
+           setLoading(false);
+        }
+
+      } catch (err) {
+        console.error('Unexpected error during auth init:', err);
+        if (mounted) setLoading(false);
+      }
+
+      const { data: sub } = supabase!.auth.onAuthStateChange(async (event, newSession) => {
         if (!mounted) return;
         
-        // Check if token actually changed to avoid unnecessary updates
-        if (newSession?.access_token === lastToken.current) {
+        if (event === 'SIGNED_OUT') {
+           clearState();
            return;
         }
-        lastToken.current = newSession?.access_token;
 
-        setSession(newSession);
-        setUser(newSession?.user ?? null);
-        if (newSession?.user) {
-          // Only fetch profile if user ID changed or we don't have a role yet
-          // Actually, let's play safe and fetch if session changed, but maybe we can optimize later.
-          // For now, the token check above is the biggest win.
-          const { data: profile, error: pfErr } = await fetchStaffProfile(newSession.user.id);
-          if (pfErr) {
-            console.warn('Profile fetch error:', pfErr.message);
-            setProfileError(pfErr.message || 'Failed to fetch staff profile');
-          } else if (!profile) {
-            setProfileError('No staff profile row found for this user.');
-          } else {
-            setProfileError(null);
-          }
-          const fetchedRole = (profile?.role as AppRole) ?? null;
-          setRole(fetchedRole);
-          setStaffId(profile?.id ?? null);
-          setDepartment(profile?.department ?? null);
-          setFullName(profile?.full_name ?? null);
-        } else {
-          setRole(null);
-          setStaffId(null);
-          setDepartment(null);
-          setFullName(null);
-          setProfileError(null);
-        }
+        // For other events (SIGNED_IN, TOKEN_REFRESHED, etc.), process the session
+        await processSession(newSession);
       });
+      
       unsubscribe = sub.subscription.unsubscribe;
     }
+
     init();
 
     return () => {
       mounted = false;
       if (unsubscribe) unsubscribe();
     };
-  }, [isConfigured]);
+  }, [isConfigured, processSession, clearState]);
 
   async function login(email: string, password: string): Promise<{ ok: boolean; message?: string }> {
     if (!isConfigured) return { ok: false, message: 'Supabase is not configured.' };
     const { data, error } = await supabase!.auth.signInWithPassword({ email, password });
     if (error) return { ok: false, message: error.message };
-    const newSession = data.session;
-    setSession(newSession);
-    setUser(newSession?.user ?? null);
-    if (newSession?.user) {
-      const { data: profile, error: pfErr } = await fetchStaffProfile(newSession.user.id);
-      if (pfErr) {
-        console.warn('Profile fetch error:', pfErr.message);
-        setProfileError(pfErr.message || 'Failed to fetch staff profile');
-      } else if (!profile) {
-        setProfileError('No staff profile row found for this user.');
-      } else {
-        setProfileError(null);
-      }
-      const fetchedRole = (profile?.role as AppRole) ?? null;
-      setRole(fetchedRole);
-      setStaffId(profile?.id ?? null);
-      setDepartment(profile?.department ?? null);
-      setFullName(profile?.full_name ?? null);
-    } else {
-      setRole(null);
-      setStaffId(null);
-      setDepartment(null);
-      setFullName(null);
-      setProfileError(null);
-    }
+    
+    // Manually process session to ensure state is updated before returning
+    await processSession(data.session);
+    
     return { ok: true };
   }
 
   async function logout() {
     if (!isConfigured) return;
     try {
-      // Attempt to sign out from the server
       const { error } = await supabase!.auth.signOut();
       if (error) throw error;
     } catch (e: unknown) {
@@ -219,13 +199,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.warn('Logout warning:', message);
       }
     }
-    setSession(null);
-    setUser(null);
-    setRole(null);
-    setStaffId(null);
-    setDepartment(null);
-    setFullName(null);
-    setProfileError(null);
+    clearState();
   }
 
   const isAdmin = role === 'admin';
@@ -239,41 +213,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (error) {
         if (error.message.includes('Refresh Token Not Found') || error.message.includes('Invalid Refresh Token')) {
           await supabase.auth.signOut().catch(() => {});
+          clearState();
         }
         return false;
       }
-      const s = data?.session ?? null;
-      if (s?.access_token && s.access_token === lastToken.current) return Boolean(s);
-      lastToken.current = s?.access_token;
-
-      setSession(s);
-      setUser(s?.user ?? null);
-      if (s?.user) {
-        const { data: profile, error: pfErr } = await fetchStaffProfile(s.user.id);
-        if (pfErr) {
-          setProfileError(pfErr.message || 'Failed to fetch staff profile');
-        } else if (!profile) {
-          setProfileError('No staff profile row found for this user.');
-        } else {
-          setProfileError(null);
-        }
-        const fetchedRole = (profile?.role as AppRole) ?? null;
-        setRole(fetchedRole);
-        setStaffId(profile?.id ?? null);
-        setDepartment(profile?.department ?? null);
-        setFullName(profile?.full_name ?? null);
-      } else {
-        setRole(null);
-        setStaffId(null);
-        setDepartment(null);
-        setFullName(null);
-        setProfileError(null);
-      }
-      return Boolean(s);
+      
+      await processSession(data?.session ?? null);
+      return Boolean(data?.session);
     } catch {
       return false;
     }
-  }, [isConfigured]);
+  }, [isConfigured, processSession, clearState]);
 
   useEffect(() => {
     refreshSessionRef.current = refreshSession;

@@ -40,7 +40,7 @@ function numberOrZero(n: any): number {
 }
 
 export default function AdminRooms() {
-  const { role, isConfigured, session } = useAuth();
+  const { role, isConfigured, session, ensureActiveSession } = useAuth();
 
   const isAdmin = useMemo(() => role === 'admin' && Boolean(isConfigured && session && supabase), [role, isConfigured, session]);
 
@@ -134,6 +134,13 @@ export default function AdminRooms() {
     setSubmitting(true);
 
     try {
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) {
+        setError('Session expired. Please sign in again to continue.');
+        setSubmitting(false);
+        return;
+      }
+
       const payload = {
         room_number: currentRoom.room_number?.trim(),
         room_name: currentRoom.room_name?.trim() || null,
@@ -208,6 +215,9 @@ export default function AdminRooms() {
     setError(null);
     setToggleLoadingId(row.id);
     try {
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) { setError('Session expired. Please sign in again.'); setToggleLoadingId(null); return; }
+
       const { data, error } = await supabase!
         .from('rooms')
         .update({ is_active: !row.is_active })

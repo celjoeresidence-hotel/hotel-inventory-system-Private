@@ -19,7 +19,7 @@ interface CreateReservationModalProps {
 }
 
 export default function CreateReservationModal({ isOpen, onClose, onSuccess }: CreateReservationModalProps) {
-  const { session, role } = useAuth();
+  const { session, role, ensureActiveSession } = useAuth();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
@@ -83,6 +83,14 @@ export default function CreateReservationModal({ isOpen, onClose, onSuccess }: C
     setLoading(true);
 
     try {
+      // 0. Ensure session is active
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) {
+        setError('Session expired. Please sign in again to continue.');
+        setLoading(false);
+        return;
+      }
+
       // 1. Validate Dates
       if (checkIn >= checkOut) {
         throw new Error('Check-out date must be after check-in date');

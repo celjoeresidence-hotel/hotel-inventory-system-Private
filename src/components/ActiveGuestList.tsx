@@ -74,7 +74,8 @@ export default function ActiveGuestList({ bookings, rooms = [], loading, onRefre
                 filtered.map((booking) => {
                   const isOverdue = booking.data.stay?.check_out && new Date(booking.data.stay.check_out) < new Date(new Date().toDateString());
                   const room = rooms.find((r: RoomStatus) => r.room_number === booking.room_number);
-                  const isHousekeepingCleared = room?.housekeeping_status === 'clean';
+                  // Ensure 'inspected' is case-insensitive and strictly checked
+                  const isHousekeepingCleared = room?.housekeeping_status?.toLowerCase() === 'inspected';
                   
                   return (
                     <tr key={booking.id} className="hover:bg-gray-50/50 transition-colors">
@@ -140,7 +141,7 @@ export default function ActiveGuestList({ bookings, rooms = [], loading, onRefre
                                     <div className="absolute bottom-full right-0 mb-2 w-48 p-2 bg-gray-900 text-white text-xs rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
                                       <div className="flex items-center gap-1.5">
                                         <IconAlertCircle className="w-3 h-3 text-red-400" />
-                                        <span>Housekeeping not cleared ({room?.housekeeping_status || 'unknown'})</span>
+                                        <span>Housekeeping not cleared (Must be 'Inspected')</span>
                                       </div>
                                     </div>
                                   )}

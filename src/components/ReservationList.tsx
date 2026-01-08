@@ -18,7 +18,7 @@ import CreateReservationModal from './CreateReservationModal';
 import { convertReservationToStay } from '../utils/reservationUtils';
 
 export default function ReservationList() {
-  const { session } = useAuth();
+  const { session, ensureActiveSession } = useAuth();
   const [reservations, setReservations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'upcoming' | 'pending' | 'missed' | 'history'>('upcoming');
@@ -70,6 +70,13 @@ export default function ReservationList() {
 
     setIsApproving(true);
     try {
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) {
+            alert('Session expired. Please sign in again.');
+            setIsApproving(false);
+            return;
+        }
+
         const { error } = await supabase.rpc('approve_record', { 
             _id: confirmingApproval.id 
         });
@@ -93,6 +100,13 @@ export default function ReservationList() {
 
     setActionLoading(id);
     try {
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) {
+            alert('Session expired. Please sign in again.');
+            setActionLoading(null);
+            return;
+        }
+
         const { error } = await supabase
             .from('operational_records')
             .update({ 
@@ -120,6 +134,13 @@ export default function ReservationList() {
 
     setActionLoading(id);
     try {
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) {
+            alert('Session expired. Please sign in again.');
+            setActionLoading(null);
+            return;
+        }
+
         const { error } = await supabase
             .from('operational_records')
             .update({ 
@@ -149,6 +170,13 @@ export default function ReservationList() {
     if (!deletingId || !supabase) return;
     setActionLoading(deletingId);
     try {
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) {
+        alert('Session expired. Please sign in again.');
+        setActionLoading(null);
+        return;
+      }
+
       const { error } = await supabase.rpc('delete_record', { _id: deletingId });
       if (error) throw error;
       setDeletingId(null);
@@ -166,6 +194,13 @@ export default function ReservationList() {
 
     setActionLoading(reservation.id);
     try {
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) {
+            alert('Session expired. Please sign in again.');
+            setActionLoading(null);
+            return;
+        }
+
         await convertReservationToStay(supabase, reservation, session?.user?.id || '');
         fetchReservations();
     } catch (err: any) {
@@ -204,6 +239,13 @@ export default function ReservationList() {
     if (!editing || !supabase) return;
     setActionLoading(editing.id);
     try {
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) {
+        alert('Session expired. Please sign in again.');
+        setActionLoading(null);
+        return;
+      }
+
       const { error } = await supabase
         .from('operational_records')
         .update({

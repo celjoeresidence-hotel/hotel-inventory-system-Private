@@ -120,7 +120,7 @@ export interface RoomStatus {
   status: 'available' | 'occupied' | 'reserved' | 'cleaning' | 'maintenance' | 'pending';
   current_guest?: string;
   check_out_date?: string;
-  housekeeping_status: 'clean' | 'dirty' | 'not_reported';
+  housekeeping_status: 'clean' | 'dirty' | 'not_reported' | 'inspected';
   upcoming_reservation?: {
     guest_name: string;
     check_in: string;

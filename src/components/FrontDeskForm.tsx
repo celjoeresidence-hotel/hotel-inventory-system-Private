@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { toast } from 'sonner';
 import { isSupabaseConfigured, supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 import type { FrontDeskRecordData, PaymentMethod, PaymentType } from '../types/frontDesk';
@@ -26,7 +27,7 @@ interface StaffOption {
 }
 
 export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void }) {
-  const { role, staffId, isConfigured } = useAuth();
+  const { role, staffId, isConfigured, ensureActiveSession } = useAuth();
   const today = useMemo(() => new Date(), []);
 
   // Wizard step state
@@ -38,7 +39,7 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
   const [check_in, setCheckIn] = useState(toISODate(today));
   const [check_out, setCheckOut] = useState(toISODate(new Date(today.getTime() + 24 * 60 * 60 * 1000))); // +1 day
   const [room_rate, setRoomRate] = useState(0);
-  const [discount_percent, setDiscountPercent] = useState(0);
+  const [discount_percent, setDiscountPercent] = useState('0');
   const [roomsLoading, setRoomsLoading] = useState(false);
   const [roomsError, setRoomsError] = useState<string | null>(null);
 
@@ -53,7 +54,7 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
   }, [check_in, check_out]);
 
   const subtotal = useMemo(() => room_rate * nights, [room_rate, nights]);
-  const discount_amount = useMemo(() => subtotal * (discount_percent / 100), [subtotal, discount_percent]);
+  const discount_amount = useMemo(() => subtotal * ((parseFloat(discount_percent) || 0) / 100), [subtotal, discount_percent]);
   const total_room_cost = useMemo(() => Number((subtotal - discount_amount).toFixed(2)), [subtotal, discount_amount]);
 
   // Step 2: Guest & Payment
@@ -111,16 +112,16 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
       setShowGuestResults(false);
   };
 
-  const [adults, setAdults] = useState(1);
-  const [children, setChildren] = useState(0);
+  const [adults, setAdults] = useState('1');
+  const [children, setChildren] = useState('0');
 
   const [payment_method, setPaymentMethod] = useState<PaymentMethod>('transfer');
   const [payment_type, setPaymentType] = useState<PaymentType>('full');
-  const [paid_amount, setPaidAmount] = useState(0);
+  const [paid_amount, setPaidAmount] = useState('');
   const [payment_date, setPaymentDate] = useState<string>(toISODate(today));
   const [payment_reference, setPaymentReference] = useState<string | null>('');
 
-  const balance = useMemo(() => Number((total_room_cost - paid_amount).toFixed(2)), [total_room_cost, paid_amount]);
+  const balance = useMemo(() => Number((total_room_cost - Number(paid_amount)).toFixed(2)), [total_room_cost, paid_amount]);
 
   // Staff attribution
   const [frontDeskStaffId, setFrontDeskStaffId] = useState<string>('');
@@ -231,19 +232,21 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
     }
     if (nights <= 0) errs.nights = 'Nights must be at least 1.';
     if (room_rate < 0) errs.room_rate = 'Price per night must be non-negative.';
-    if (discount_percent < 0 || discount_percent > 100) errs.discount_percent = 'Discount must be between 0 and 100.';
+    const discountVal = parseFloat(discount_percent);
+    if (isNaN(discountVal) || discountVal < 0 || discountVal > 100) errs.discount_percent = 'Discount must be between 0 and 100.';
     setStep1Errors(errs);
     return Object.keys(errs).length === 0;
   }
 
   function validateStep2() {
     const errs: Record<string, string> = {};
+    const paidVal = Number(paid_amount);
     if (!full_name.trim()) errs.full_name = 'Guest full name is required.';
     if (!phone.trim()) errs.phone = 'Phone is required.';
-    if (adults < 0) errs.adults = 'Adults must be >= 0.';
-    if (children < 0) errs.children = 'Children must be >= 0.';
-    if (paid_amount < 0) errs.paid_amount = 'Amount paid must be >= 0.';
-    if (paid_amount > total_room_cost) errs.paid_amount = 'Amount paid cannot exceed total.';
+    if (Number(adults) < 0) errs.adults = 'Adults must be >= 0.';
+    if (Number(children) < 0) errs.children = 'Children must be >= 0.';
+    if (isNaN(paidVal) || paidVal < 0) errs.paid_amount = 'Amount paid must be >= 0.';
+    // We allow overpayment (credit) now, so no check for paid_amount > total_room_cost
     if (!payment_method) errs.payment_method = 'Payment method is required.';
     if (!payment_type) errs.payment_type = 'Payment type is required.';
     if (!payment_date || isNaN(new Date(payment_date).getTime())) errs.payment_date = 'Payment date is invalid.';
@@ -268,13 +271,9 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
     if (!ok2) { setStep(2); return; }
 
     // Enforce authenticated submission
-    const { data: sessionData, error: sessionError } = await supabase!.auth.getSession();
-    if (sessionError) {
-      setError('Authentication check failed. Please try again.');
-      return;
-    }
-    if (!sessionData?.session) {
-      setError('You must be logged in to submit records');
+    const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+    if (!ok) {
+      setError('Session expired. Please sign in again to continue.');
       return;
     }
 
@@ -286,25 +285,27 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
         room_id, 
         check_in, 
         check_out, 
-        adults, 
-        children,
+        adults: Number(adults), 
+        children: Number(children),
         status: 'checked_in'
       },
       pricing: { 
         room_rate, 
         nights, 
-        discount_percent, 
+        discount_percent: Number(discount_percent), 
         discount_amount: Number(discount_amount.toFixed(2)),
         original_price: Number(subtotal.toFixed(2)),
         total_room_cost 
       },
-      payment: { paid_amount, payment_method, payment_type, payment_date, payment_reference: payment_reference || null, balance },
+      payment: { paid_amount: Number(paid_amount), payment_method, payment_type, payment_date, payment_reference: payment_reference || null, balance },
       meta: { notes: notes || null, created_at_local },
     };
 
     const validation = validateFrontDeskData(payload);
     if (!validation.valid) {
-      setError(validation.errors.join('\n'));
+      const msg = validation.errors.join('\n');
+      setError(msg);
+      toast.error('Validation failed', { description: msg });
       return;
     }
 
@@ -335,8 +336,8 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
           room_id, 
           check_in, 
           check_out, 
-          adults, 
-          children,
+          adults: Number(adults), 
+          children: Number(children),
           status: 'checked_in'
         },
         meta: { notes: notes || null, created_at_local },
@@ -353,12 +354,15 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
       if (insertError2) throw insertError2;
 
       // Success
+      toast.success('Check-in completed successfully');
       if (onSuccess) onSuccess();
       // Reset form
       setStep(1);
       setRoomId('');
     } catch (err: any) {
-      setError(err.message || 'An unexpected error occurred.');
+      const msg = err.message || 'An unexpected error occurred.';
+      setError(msg);
+      toast.error('Submission failed', { description: msg });
     } finally {
       setSubmitting(false);
     }
@@ -477,7 +481,7 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
                         type="number"
                         label="Discount (%)"
                         value={discount_percent}
-                        onChange={(e) => setDiscountPercent(Number(e.target.value))}
+                        onChange={(e) => setDiscountPercent(e.target.value)}
                         min={0}
                         max={100}
                         error={step1Errors.discount_percent}
@@ -578,9 +582,9 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
                         <Input
                           type="number"
                           label="Adults"
-                          min={0}
+                          min={1}
                           value={adults}
-                          onChange={(e) => setAdults(Number(e.target.value))}
+                          onChange={(e) => setAdults(e.target.value)}
                           required
                           error={step2Errors.adults}
                           fullWidth
@@ -590,7 +594,7 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
                           label="Children"
                           min={0}
                           value={children}
-                          onChange={(e) => setChildren(Number(e.target.value))}
+                          onChange={(e) => setChildren(e.target.value)}
                           required
                           error={step2Errors.children}
                           fullWidth
@@ -635,7 +639,7 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
                           min={0}
                           step="0.01"
                           value={paid_amount}
-                          onChange={(e) => setPaidAmount(Number(e.target.value))}
+                          onChange={(e) => setPaidAmount(e.target.value)}
                           required
                           error={step2Errors.paid_amount}
                           fullWidth
@@ -726,14 +730,14 @@ export default function FrontDeskForm({ onSuccess }: { onSuccess?: () => void })
                     {step === 2 && (
                        <div className="flex justify-between text-green-600">
                         <span>Paid Amount</span>
-                        <span className="font-medium">- ₦{paid_amount.toLocaleString()}</span>
+                        <span className="font-medium">- ₦{Number(paid_amount).toLocaleString()}</span>
                       </div>
                     )}
                     
                     <div className="pt-3 border-t border-gray-200 flex justify-between items-center">
                       <span className="font-bold text-gray-900">Total Due</span>
                       <span className="text-xl font-bold text-green-600">
-                         ₦{(total_room_cost - (step === 2 ? paid_amount : 0)).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                         ₦{(total_room_cost - (step === 2 ? Number(paid_amount) : 0)).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                       </span>
                     </div>
                      <div className="flex justify-between text-xs text-gray-500 mt-1">

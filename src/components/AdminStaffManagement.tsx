@@ -54,7 +54,7 @@ export default function AdminStaffManagement() {
 }
 
 function AdminStaffManagementInner() {
-  const { isAdmin, isManager, isSupervisor } = useAuth();
+  const { isAdmin, isManager, isSupervisor, ensureActiveSession } = useAuth();
   const [staff, setStaff] = useState<StaffProfile[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -197,6 +197,13 @@ function AdminStaffManagementInner() {
     }
 
     try {
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) {
+        setFormError('Session expired. Please sign in again to continue.');
+        setSaving(false);
+        return;
+      }
+
       if (editing) {
         if (isSupervisor) {
           throw new Error('Supervisors have read-only access.');
@@ -259,6 +266,13 @@ function AdminStaffManagementInner() {
     }
     try {
       setToggleLoadingId(row.id);
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) {
+        setError('Session expired. Please sign in again.');
+        setToggleLoadingId(null);
+        return;
+      }
+      
       const { error } = await supabase!
         .from('staff_profiles')
         .update({ is_active: !row.is_active })

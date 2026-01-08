@@ -42,7 +42,7 @@ interface CatalogCategory {
 }
 
 export default function InventoryCatalog() {
-  const { session, isConfigured, isSupervisor, isManager, isAdmin } = useAuth();
+  const { session, isConfigured, isSupervisor, isManager, isAdmin, ensureActiveSession } = useAuth();
   const canView = useMemo(() => Boolean(isConfigured && session && (isSupervisor || isManager || isAdmin)), [isConfigured, session, isSupervisor, isManager, isAdmin]);
 
   const [error, setError] = useState<string | null>(null);
@@ -50,8 +50,14 @@ export default function InventoryCatalog() {
   const [categories, setCategories] = useState<CatalogCategory[]>([]);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
+  // Server-side filter options
+  const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
+  const [collectionOptions, setCollectionOptions] = useState<string[]>([]);
+  const [allCollections, setAllCollections] = useState<{name: string, category: string}[]>([]);
+
   // UI state: filters and expand/collapse
   const [searchTerm, setSearchTerm] = useState<string>('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [selectedCollection, setSelectedCollection] = useState<string>('');
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
@@ -59,7 +65,83 @@ export default function InventoryCatalog() {
 
   // Pagination
   const [page, setPage] = useState<number>(1);
-  const PAGE_SIZE = 5;
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const PAGE_SIZE = 50; // Increased page size since we are paginating items now
+
+  // Debounce search term
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm);
+      setPage(1); // Reset to page 1 on search change
+    }, 500);
+    return () => clearTimeout(handler);
+  }, [searchTerm]);
+
+  // Reset page when filters change
+  useEffect(() => {
+    setPage(1);
+  }, [selectedCategory, selectedCollection]);
+
+  // Fetch Filters (Categories and Collections)
+  async function fetchFilters() {
+    try {
+      if (!isConfigured || !session || !supabase) return;
+
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) return;
+
+      // Fetch Categories and Collections from inventory_items
+      const { data, error } = await supabase
+        .from('inventory_items')
+        .select('category, collection')
+        .is('deleted_at', null);
+
+      if (error) {
+        console.error('Error fetching filters:', error);
+        return;
+      }
+
+      const uniqueCategories = new Set<string>();
+      const uniqueCollections: {name: string, category: string}[] = [];
+      const seenCollections = new Set<string>();
+
+      (data || []).forEach((row: any) => {
+        if (row.category) {
+          uniqueCategories.add(row.category);
+        }
+        if (row.collection && row.category) {
+          const key = `${row.category}::${row.collection}`;
+          if (!seenCollections.has(key)) {
+            uniqueCollections.push({ name: row.collection, category: row.category });
+            seenCollections.add(key);
+          }
+        }
+      });
+
+      setCategoryOptions(Array.from(uniqueCategories).sort());
+      setAllCollections(uniqueCollections);
+      // Collection options will be derived from allCollections based on selectedCategory
+    } catch (err) {
+      console.error('Error in fetchFilters:', err);
+    }
+  }
+
+  useEffect(() => {
+    fetchFilters();
+  }, [isConfigured, session]);
+
+  // Derive collection options based on selected category
+  useEffect(() => {
+    if (!selectedCategory) {
+      const allCols = Array.from(new Set(allCollections.map(c => c.name))).sort();
+      setCollectionOptions(allCols);
+    } else {
+      const cols = allCollections
+        .filter(c => c.category === selectedCategory)
+        .map(c => c.name);
+      setCollectionOptions(Array.from(new Set(cols)).sort());
+    }
+  }, [selectedCategory, allCollections]);
 
   async function fetchCatalog() {
     setError(null);
@@ -67,54 +149,151 @@ export default function InventoryCatalog() {
     try {
       if (!canView || !supabase) return;
 
-      const { data, error } = await supabase
-        .from('inventory_catalog_view')
-        .select('*')
-        .order('category', { ascending: true })
-        .order('collection_name', { ascending: true })
-        .order('item_name', { ascending: true });
-
-      if (error) throw error;
-
-      // Build Category → Collection → Items hierarchy
-      const catMap = new Map<string, { active: boolean; colMap: Map<string, { active: boolean; items: CatalogItem[] }> }>();
-
-      for (const row of (data ?? [])) {
-        const catName = row.category;
-        const colName = row.collection_name;
-        
-        if (!catMap.has(catName)) catMap.set(catName, { active: true, colMap: new Map() });
-        const entry = catMap.get(catName)!;
-        
-        if (!entry.colMap.has(colName)) entry.colMap.set(colName, { active: true, items: [] });
-        const colEntry = entry.colMap.get(colName)!;
-        
-        colEntry.items.push({
-          item_name: row.item_name,
-          unit: row.unit,
-          current_stock: Number(row.current_stock ?? 0),
-          active: true
-        });
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) {
+        setError('Session expired. Please sign in again.');
+        setLoading(false);
+        return;
       }
 
-      const catList: CatalogCategory[] = Array.from(catMap.entries()).map(([catName, { active, colMap }]) => ({
-        name: catName,
-        active,
-        collections: Array.from(colMap.entries()).map(([colName, { active: colActive, items }]) => ({
-          name: colName,
-          active: colActive,
-          items: items // Already sorted by query
-        })).sort((a, b) => a.name.localeCompare(b.name)),
-      })).sort((a, b) => a.name.localeCompare(b.name));
-      
-      setCategories(catList);
-      setLastUpdated(new Date());
+      try {
+        let builtCatList: CatalogCategory[] = [];
+        let query = supabase
+          .from('inventory_catalog_view')
+          .select('*', { count: 'exact' });
 
-      // Default expand all categories initially if first load
-      if (categories.length === 0 && catList.length > 0) {
-        setExpandedCategories(new Set(catList.map(c => c.name)));
-        setExpandedCollections(new Set());
+        if (selectedCategory) {
+          query = query.eq('category', selectedCategory);
+        }
+        if (selectedCollection) {
+          query = query.eq('collection_name', selectedCollection);
+        }
+        if (debouncedSearchTerm) {
+          query = query.ilike('item_name', `%${debouncedSearchTerm}%`);
+        }
+
+        const from = (page - 1) * PAGE_SIZE;
+        const to = from + PAGE_SIZE - 1;
+        
+        const { data, error, count } = await query
+          .order('category', { ascending: true })
+          .order('collection_name', { ascending: true })
+          .order('item_name', { ascending: true })
+          .range(from, to);
+
+        if (error) throw error;
+
+        setTotalCount(count || 0);
+
+        const catMap = new Map<string, { active: boolean; colMap: Map<string, { active: boolean; items: CatalogItem[] }> }>();
+        for (const row of (data ?? [])) {
+          const catName = row.category;
+          const colName = row.collection_name;
+          if (!catMap.has(catName)) catMap.set(catName, { active: true, colMap: new Map() });
+          const entry = catMap.get(catName)!;
+          if (!entry.colMap.has(colName)) entry.colMap.set(colName, { active: true, items: [] });
+          const colEntry = entry.colMap.get(colName)!;
+          colEntry.items.push({
+            item_name: row.item_name,
+            unit: row.unit,
+            current_stock: Number(row.current_stock ?? 0),
+            active: true
+          });
+        }
+
+        builtCatList = Array.from(catMap.entries()).map(([catName, { active, colMap }]) => ({
+          name: catName,
+          active,
+          collections: Array.from(colMap.entries()).map(([colName, { active: colActive, items }]) => ({
+            name: colName,
+            active: colActive,
+            items: items
+          })).sort((a, b) => a.name.localeCompare(b.name)),
+        })).sort((a, b) => a.name.localeCompare(b.name));
+        
+        setCategories(builtCatList);
+        setLastUpdated(new Date());
+
+        if (builtCatList.length > 0 && (expandedCategories.size === 0 || debouncedSearchTerm)) {
+          setExpandedCategories(new Set(builtCatList.map((c: CatalogCategory) => c.name)));
+          setExpandedCollections(new Set());
+          if (debouncedSearchTerm) {
+            const allColKeys = new Set<string>();
+            builtCatList.forEach((c: CatalogCategory) => c.collections.forEach((col: CatalogCollection) => allColKeys.add(`${c.name}::${col.name}`)));
+            setExpandedCollections(allColKeys);
+          }
+        }
+      } catch (viewErr: any) {
+        // Fallback: build catalog from inventory_items and aggregate stock from v_inventory_ledger
+        let itemsQuery = supabase
+          .from('inventory_items')
+          .select('item_name, unit, category, collection')
+          .is('deleted_at', null);
+        if (selectedCategory) itemsQuery = itemsQuery.eq('category', selectedCategory);
+        if (selectedCollection) itemsQuery = itemsQuery.eq('collection', selectedCollection);
+        const { data: itemsData, error: itemsErr } = await itemsQuery;
+        if (itemsErr) throw itemsErr;
+
+        const filtered = (itemsData ?? []).filter((r: any) =>
+          debouncedSearchTerm ? String(r.item_name).toLowerCase().includes(debouncedSearchTerm.toLowerCase()) : true
+        );
+        setTotalCount(filtered.length);
+
+        const itemNames = filtered.map((r: any) => r.item_name);
+        const stockMap = new Map<string, number>();
+        if (itemNames.length > 0) {
+          const { data: ledgerRows } = await supabase
+            .from('v_inventory_ledger')
+            .select('item_name, quantity_change')
+            .eq('department', 'STORE')
+            .in('item_name', itemNames);
+          for (const row of ((ledgerRows ?? []) as any[])) {
+            const key = row.item_name;
+            const prev = stockMap.get(key) ?? 0;
+            stockMap.set(key, prev + Number(row.quantity_change ?? 0));
+          }
+        }
+
+        const catMap = new Map<string, { active: boolean; colMap: Map<string, { active: boolean; items: CatalogItem[] }> }>();
+        for (const r of filtered as any[]) {
+          const catName = r.category;
+          const colName = r.collection;
+          if (!catMap.has(catName)) catMap.set(catName, { active: true, colMap: new Map() });
+          const entry = catMap.get(catName)!;
+          if (!entry.colMap.has(colName)) entry.colMap.set(colName, { active: true, items: [] });
+          const colEntry = entry.colMap.get(colName)!;
+          colEntry.items.push({
+            item_name: r.item_name,
+            unit: r.unit,
+            current_stock: stockMap.get(r.item_name) ?? 0,
+            active: true
+          });
+        }
+
+        const builtCatList: CatalogCategory[] = Array.from(catMap.entries()).map(([catName, { active, colMap }]) => ({
+          name: catName,
+          active,
+          collections: Array.from(colMap.entries()).map(([colName, { active: colActive, items }]) => ({
+            name: colName,
+            active: colActive,
+            items
+          })).sort((a, b) => a.name.localeCompare(b.name)),
+        })).sort((a, b) => a.name.localeCompare(b.name));
+
+        setCategories(builtCatList);
+        setLastUpdated(new Date());
+
+        if (builtCatList.length > 0 && (expandedCategories.size === 0 || debouncedSearchTerm)) {
+          setExpandedCategories(new Set(builtCatList.map((c: CatalogCategory) => c.name)));
+          setExpandedCollections(new Set());
+          if (debouncedSearchTerm) {
+            const allColKeys = new Set<string>();
+            builtCatList.forEach((c: CatalogCategory) => c.collections.forEach((col: CatalogCollection) => allColKeys.add(`${c.name}::${col.name}`)));
+            setExpandedCollections(allColKeys);
+          }
+        }
       }
+
     } catch (err: any) {
       console.error('Error fetching catalog:', err);
       setError(err.message);
@@ -125,54 +304,9 @@ export default function InventoryCatalog() {
 
   useEffect(() => {
     fetchCatalog();
-  }, [canView]);
+  }, [canView, page, debouncedSearchTerm, selectedCategory, selectedCollection]);
 
-  // Derived options for filters
-  const categoryOptions = useMemo(() => {
-    const names = Array.from(new Set(categories.map(c => c.name)));
-    return names.sort((a, b) => a.localeCompare(b));
-  }, [categories]);
-
-  const collectionOptions = useMemo(() => {
-    if (!selectedCategory) return [] as string[];
-    const cat = categories.find(c => c.name === selectedCategory);
-    const names = Array.from(new Set((cat?.collections ?? []).map(c => c.name)));
-    return names.sort((a, b) => a.localeCompare(b));
-  }, [categories, selectedCategory]);
-
-  // Client-side filtered view of categories/collections/items
-  const filteredCategories = useMemo(() => {
-    const st = searchTerm.trim().toLowerCase();
-    const catFilter = selectedCategory || '';
-    const colFilter = selectedCollection || '';
-
-    const matchesItem = (it: CatalogItem) => {
-      if (!st) return true;
-      return it.item_name.toLowerCase().includes(st);
-    };
-
-    const filtered: CatalogCategory[] = [];
-    for (const cat of categories) {
-      if (catFilter && cat.name !== catFilter) continue;
-      const filteredCollections: CatalogCollection[] = [];
-      for (const col of cat.collections) {
-        if (colFilter && col.name !== colFilter) continue;
-        const items = col.items.filter(matchesItem);
-        if (items.length > 0 || (!st && !colFilter)) {
-          filteredCollections.push({ ...col, items });
-        }
-      }
-      if (filteredCollections.length > 0 || (!st && !catFilter)) {
-        filtered.push({ ...cat, collections: filteredCollections });
-      }
-    }
-    return filtered;
-  }, [categories, searchTerm, selectedCategory, selectedCollection]);
-
-  const paginatedCategories = useMemo(() => {
-    const start = (page - 1) * PAGE_SIZE;
-    return filteredCategories.slice(start, start + PAGE_SIZE);
-  }, [filteredCategories, page]);
+  // Removed client-side filtering logic
 
   // Handlers for expand/collapse
   function toggleCategory(name: string) {
@@ -269,7 +403,7 @@ export default function InventoryCatalog() {
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600 mx-auto mb-4"></div>
           <p className="text-gray-500">Loading catalog...</p>
         </div>
-      ) : filteredCategories.length === 0 ? (
+      ) : categories.length === 0 ? (
         <div className="text-center py-16 bg-gray-50 rounded-lg border border-dashed border-gray-300">
           <IconBox className="mx-auto h-12 w-12 text-gray-400 mb-3" />
           <h3 className="text-lg font-medium text-gray-900">No items found</h3>
@@ -277,7 +411,10 @@ export default function InventoryCatalog() {
         </div>
       ) : (
         <div className="space-y-4">
-          {paginatedCategories.map((cat) => (
+          <div className="text-xs text-gray-500 text-right">
+            Showing {categories.reduce((acc, cat) => acc + cat.collections.reduce((cAcc, col) => cAcc + col.items.length, 0), 0)} of {totalCount} items
+          </div>
+          {categories.map((cat) => (
             <Card key={cat.name} className="overflow-hidden p-0 border-none shadow-sm">
               <div 
                 className="bg-gray-50 px-4 py-3 border-b border-gray-200 flex items-center justify-between cursor-pointer hover:bg-gray-100 transition-colors"
@@ -291,7 +428,7 @@ export default function InventoryCatalog() {
                   {!cat.active && <Badge variant="warning">Inactive</Badge>}
                 </div>
                 <Badge variant="outline" className="bg-white border-gray-300">
-                  {cat.collections.reduce((acc, col) => acc + col.items.length, 0)} items
+                  {cat.collections.reduce((acc, col) => acc + col.items.length, 0)} items visible
                 </Badge>
               </div>
 
@@ -371,7 +508,7 @@ export default function InventoryCatalog() {
           
           <Pagination
             currentPage={page}
-            totalPages={Math.ceil(filteredCategories.length / PAGE_SIZE)}
+            totalPages={Math.ceil(totalCount / PAGE_SIZE)}
             onPageChange={setPage}
             className="mt-6"
           />

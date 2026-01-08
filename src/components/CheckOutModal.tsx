@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 import { Button } from './ui/Button';
@@ -75,8 +76,10 @@ export default function CheckOutModal({ isOpen, onClose, booking, roomStatus, on
     setLoading(true);
     setError(null);
 
-    if (roomStatus && roomStatus.housekeeping_status !== 'clean') {
-        setError(`Checkout blocked: Room is marked as ${roomStatus.housekeeping_status}. It must be cleaned first.`);
+    if (roomStatus && roomStatus.housekeeping_status?.toLowerCase() !== 'inspected') {
+        const msg = `Checkout blocked: Room is marked as ${roomStatus.housekeeping_status}. It must be 'inspected' first.`;
+        setError(msg);
+        toast.error('Checkout blocked', { description: msg });
         setLoading(false);
         return;
     }
@@ -189,10 +192,13 @@ export default function CheckOutModal({ isOpen, onClose, booking, roomStatus, on
       }
 
       onSuccess();
+      toast.success('Checkout processed successfully');
       onClose();
     } catch (err: any) {
       console.error('Checkout error:', err);
-      setError(err.message || 'Failed to process checkout');
+      const msg = err.message || 'Failed to process checkout';
+      setError(msg);
+      toast.error('Checkout failed', { description: msg });
     } finally {
       setLoading(false);
     }

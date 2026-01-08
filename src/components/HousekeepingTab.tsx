@@ -1,21 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
+import { toast } from 'sonner';
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
 import { Button } from './ui/Button';
 import { IconPlus, IconFilter, IconCalendar } from './ui/Icons';
 import { useAuth } from '../context/AuthContext';
+import { useFrontDesk } from '../hooks/useFrontDesk';
 
 interface Housekeeper {
   id: string;
   name: string;
   active: boolean;
   notes?: string | null;
-}
-
-interface RoomOption {
-  id: string;
-  room_number: string;
-  room_name?: string;
-  room_type?: string;
 }
 
 interface HousekeepingReportRow {
@@ -30,7 +25,7 @@ type HKStatus = typeof housekeepingStatuses[number];
 
 export default function HousekeepingTab({ onSubmitted }: { onSubmitted?: () => void }) {
   const [housekeepers, setHousekeepers] = useState<Housekeeper[]>([]);
-  const [rooms, setRooms] = useState<RoomOption[]>([]);
+  const { rooms, refresh } = useFrontDesk();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { user, ensureActiveSession } = useAuth();
@@ -92,13 +87,6 @@ export default function HousekeepingTab({ onSubmitted }: { onSubmitted?: () => v
           setUseRecordsHK(false);
         }
 
-        const { data: rm, error: rmErr } = await client
-          .from('rooms')
-          .select('id, room_number, room_name, room_type')
-          .eq('is_active', true)
-          .order('room_number');
-        if (rmErr) throw rmErr;
-
         const { data: recs, error: recErr } = await client
           .from('operational_records')
           .select('id, created_at, status, data')
@@ -110,7 +98,7 @@ export default function HousekeepingTab({ onSubmitted }: { onSubmitted?: () => v
 
         if (!mounted) return;
         setHousekeepers((hk || []) as any);
-        setRooms((rm || []).map((r: any) => ({ id: String(r.id), room_number: r.room_number, room_name: r.room_name, room_type: r.room_type })));
+        // Rooms are now managed by useFrontDesk, no need to setRooms locally
         setRecentReports((recs || []) as any);
       } catch (e: any) {
         setError(e.message);
@@ -162,7 +150,10 @@ export default function HousekeepingTab({ onSubmitted }: { onSubmitted?: () => v
       setMaintenanceRequired(false);
       setNotes('');
       if (onSubmitted) onSubmitted();
-      // reload recent
+      toast.success('Report submitted successfully');
+      // Refresh global room status
+      refresh();
+
       const { data: recs, error: recErr } = await client
         .from('operational_records')
         .select('id, created_at, status, data')
@@ -303,7 +294,9 @@ export default function HousekeepingTab({ onSubmitted }: { onSubmitted?: () => v
         }
       }
     } catch (e: any) {
-      setError(e.message);
+      const msg = e.message;
+      setError(msg);
+      toast.error('Failed to submit report', { description: msg });
     } finally {
       setLoading(false);
     }
@@ -315,6 +308,9 @@ export default function HousekeepingTab({ onSubmitted }: { onSubmitted?: () => v
     setAddingHK(true);
     setError(null);
     try {
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) { setError('Session expired. Please sign in again.'); setAddingHK(false); return; }
+
       const client = supabase!;
       if (useRecordsHK) {
         const { error } = await client.from('operational_records').insert({
@@ -357,8 +353,11 @@ export default function HousekeepingTab({ onSubmitted }: { onSubmitted?: () => v
         setHousekeepers((hk || []) as any);
       }
       setNewHKName('');
+      toast.success('Housekeeper added successfully');
     } catch (e: any) {
-      setError(e.message);
+      const msg = e.message;
+      setError(msg);
+      toast.error('Failed to add housekeeper', { description: msg });
     } finally {
       setAddingHK(false);
     }
@@ -438,20 +437,90 @@ export default function HousekeepingTab({ onSubmitted }: { onSubmitted?: () => v
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Rooms</label>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
               {rooms.map(r => {
                 const checked = roomIds.includes(r.id);
+                const statusColor = {
+                  'occupied': 'bg-red-100 text-red-800',
+                  'available': 'bg-green-100 text-green-800',
+                  'cleaning': 'bg-yellow-100 text-yellow-800',
+                  'reserved': 'bg-blue-100 text-blue-800',
+                  'maintenance': 'bg-orange-100 text-orange-800',
+                  'pending': 'bg-gray-100 text-gray-800'
+                }[r.status] || 'bg-gray-100 text-gray-800';
+
+                const hkColor = {
+                    'clean': 'text-green-600 border-green-200',
+                    'inspected': 'text-green-700 border-green-300 ring-1 ring-green-300',
+                    'dirty': 'text-red-600 border-red-200',
+                    'not_reported': 'text-gray-400 border-gray-200'
+                }[r.housekeeping_status as string] || 'text-gray-400 border-gray-200';
+
                 return (
-                  <label key={r.id} className={`border rounded-lg p-2 cursor-pointer flex items-center gap-2 ${checked ? 'bg-green-50 border-green-300' : 'bg-white border-gray-200'}`}>
-                    <input type="checkbox" checked={checked} onChange={(e) => {
-                      if (e.target.checked) setRoomIds([...roomIds, r.id]);
-                      else setRoomIds(roomIds.filter(id => id !== r.id));
-                    }} />
-                    <span className="text-sm font-medium text-gray-700">
-                      {r.room_number}
-                      {r.room_name ? ` • ${r.room_name}` : ''}
-                      {r.room_type ? ` (${r.room_type})` : ''}
-                    </span>
+                  <label key={r.id} className={`border rounded-lg p-3 cursor-pointer flex flex-col gap-2 transition-colors ${checked ? 'bg-green-50 border-green-300 ring-1 ring-green-300' : 'bg-white border-gray-200 hover:border-gray-300'}`}>
+                    <div className="flex items-center gap-2">
+                        <input type="checkbox" checked={checked} onChange={(e) => {
+                        if (e.target.checked) setRoomIds([...roomIds, r.id]);
+                        else setRoomIds(roomIds.filter(id => id !== r.id));
+                        }} />
+                        <span className="text-sm font-bold text-gray-900">{r.room_number}</span>
+                        {r.room_type && <span className="text-xs text-gray-500 truncate">({r.room_type})</span>}
+                    </div>
+                    
+                    <div className="flex items-center gap-2 ml-5 flex-wrap">
+                         <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${statusColor}`}>
+                             {r.status}
+                         </span>
+                         <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border bg-white ${hkColor}`}>
+                             {r.housekeeping_status === 'clean' ? 'CLEAN' : r.housekeeping_status === 'inspected' ? 'INSPECTED' : 'DIRTY'}
+                         </span>
+                    </div>
+                    {r.room_name && <div className="text-xs text-gray-500 ml-5 truncate">{r.room_name}</div>}
+
+                    {/* Guest / Reservation Info */}
+                    {(r.status === 'occupied' || r.status === 'reserved') && (
+                        <div className={`mt-2 mx-1 text-xs p-1.5 rounded border ${
+                            r.check_out_date?.split('T')[0] === new Date().toISOString().split('T')[0] 
+                            ? 'bg-red-50 text-red-800 border-red-100' 
+                            : 'bg-gray-50 text-gray-700 border-gray-100'
+                        }`}>
+                            <div className="font-semibold truncate flex items-center gap-1">
+                                <span className={`w-1.5 h-1.5 rounded-full inline-block ${
+                                    r.check_out_date?.split('T')[0] === new Date().toISOString().split('T')[0] ? 'bg-red-500' : 'bg-green-500'
+                                }`}></span>
+                                {r.current_guest || 'Unknown Guest'}
+                            </div>
+                            <div className={`text-[10px] ml-2.5 ${
+                                r.check_out_date?.split('T')[0] === new Date().toISOString().split('T')[0] ? 'font-bold uppercase text-red-700' : 'text-gray-500'
+                            }`}>
+                                {r.status === 'occupied' 
+                                    ? (r.check_out_date?.split('T')[0] === new Date().toISOString().split('T')[0] ? 'DUE OUT TODAY' : `Due Out: ${r.check_out_date?.split('T')[0]}`)
+                                    : `Ends: ${r.check_out_date?.split('T')[0]}`
+                                }
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Upcoming Reservation */}
+                    {r.upcoming_reservation && (
+                        <div className={`mt-1 mx-1 text-[10px] p-1.5 rounded border ${
+                            r.upcoming_reservation.check_in.split('T')[0] === new Date().toISOString().split('T')[0]
+                            ? 'bg-blue-100 text-blue-900 border-blue-200'
+                            : 'bg-blue-50 text-blue-700 border-blue-100'
+                        }`}>
+                            <div className="font-bold flex items-center gap-1 mb-0.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-blue-400 inline-block"></span>
+                                {r.upcoming_reservation.check_in.split('T')[0] === new Date().toISOString().split('T')[0] ? 'ARRIVING TODAY' : 'Upcoming'}
+                            </div>
+                            <div className="truncate font-medium">{r.upcoming_reservation.guest_name}</div>
+                            <div className="opacity-80">
+                                {r.upcoming_reservation.check_in.split('T')[0] === new Date().toISOString().split('T')[0] 
+                                    ? 'Check-in: Today' 
+                                    : r.upcoming_reservation.check_in.split('T')[0]
+                                }
+                            </div>
+                        </div>
+                    )}
                   </label>
                 );
               })}
@@ -465,7 +534,10 @@ export default function HousekeepingTab({ onSubmitted }: { onSubmitted?: () => v
                 value={status}
                 onChange={(e) => setStatus(e.target.value as HKStatus)}
               >
-                {housekeepingStatuses.map(s => <option key={s} value={s}>{s}</option>)}
+                <option value="inspected">Inspected / Clean / Ready</option>
+                <option value="cleaned">Cleaned (Needs Inspection)</option>
+                <option value="dirty">Dirty / Needs Cleaning</option>
+                <option value="maintenance">Maintenance Required</option>
               </select>
             </div>
             <div>

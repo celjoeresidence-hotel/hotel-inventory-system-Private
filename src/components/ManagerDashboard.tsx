@@ -56,7 +56,7 @@ function formatCurrency(amount: number | null | undefined) {
 }
 
 export default function ManagerDashboard() {
-  const { role, session, isConfigured } = useAuth();
+  const { role, session, isConfigured, ensureActiveSession } = useAuth();
   const canUse = useMemo(() => Boolean(role === 'manager' && isConfigured && session && supabase), [role, isConfigured, session]);
 
   const [rows, setRows] = useState<OperationalRecordRow[]>([]);
@@ -75,6 +75,13 @@ export default function ManagerDashboard() {
       setError(null);
       setLoading(true);
       try {
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) {
+          setError('Session expired. Please sign in again.');
+          setLoading(false);
+          return;
+        }
+
         const todayStr = new Date().toISOString().split('T')[0];
         const startOfMonthStr = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
 

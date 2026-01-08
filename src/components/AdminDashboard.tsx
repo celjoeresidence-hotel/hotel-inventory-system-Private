@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
+import { toast } from 'sonner';
 import { Card } from './ui/Card';
 import { 
   IconCurrencyDollar, 
@@ -50,7 +51,7 @@ interface DashboardData {
 }
 
 export default function AdminDashboard() {
-  const { role } = useAuth();
+  const { role, ensureActiveSession } = useAuth();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -79,8 +80,17 @@ export default function AdminDashboard() {
     if (!confirmingId || !supabase) return;
     setIsApproving(true);
     try {
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) {
+            toast.error('Session expired. Please sign in again.');
+            setIsApproving(false);
+            return;
+        }
+
         const { error } = await supabase.rpc('approve_record', { _id: confirmingId });
         if (error) throw error;
+        
+        toast.success('Record approved successfully');
         
         // Remove from list
         setPendingRecords(prev => prev.filter(p => p.id !== confirmingId));
@@ -90,7 +100,7 @@ export default function AdminDashboard() {
         fetchDashboardData();
     } catch (err: any) {
         console.error("Error approving:", err);
-        alert(`Error approving reservation: ${err.message}`);
+        toast.error(`Error approving reservation: ${err.message}`);
     } finally {
         setIsApproving(false);
     }

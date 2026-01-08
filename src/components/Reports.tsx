@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
+import { toast } from 'sonner';
 import { Card } from './ui/Card';
 import { Input } from './ui/Input';
 import { Select } from './ui/Select';
@@ -35,7 +36,7 @@ interface DailySummary {
 }
 
 export default function Reports() {
-  const { role: userRole } = useAuth();
+  const { role: userRole, ensureActiveSession } = useAuth();
   const [queryMode, setQueryMode] = useState<QueryMode>('day');
   const [startDate, setStartDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [endDate, setEndDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
@@ -76,6 +77,13 @@ export default function Reports() {
       if (!isSupabaseConfigured || !supabase) return;
       setLoading(true);
       try {
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) {
+            toast.error('Session expired. Please sign in again.');
+            setLoading(false);
+            return;
+        }
+
         const depts: { id: ReportSection, dbName: string }[] = [
           { id: 'storekeeper', dbName: 'STORE' },
           { id: 'kitchen', dbName: 'KITCHEN' },

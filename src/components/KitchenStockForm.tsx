@@ -1,7 +1,6 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from '../supabaseClient'
 import { useAuth } from '../context/AuthContext'
-import type { KitchenStockData } from '../types/kitchen'
 import InventoryConsumptionTable from './InventoryConsumptionTable'
 import { Card } from './ui/Card'
 import { Button } from './ui/Button'
@@ -12,9 +11,10 @@ import { Pagination } from './ui/Pagination'
 import { IconAlertCircle, IconCheckCircle, IconChefHat } from './ui/Icons'
 import { StaffSelect } from './ui/StaffSelect'
 import { InventoryHistoryModule } from './InventoryHistoryModule'
+import { isAssignedToRole } from '../utils/assignment'
 
 export default function KitchenStockForm() {
-  const { role, session, isConfigured, ensureActiveSession, isSupervisor, isManager, isAdmin, user } = useAuth()
+  const { role, session, isConfigured, ensureActiveSession, isSupervisor, isManager, isAdmin } = useAuth()
 
   // Role gating remains: screen is for kitchen staff
   if (role !== 'kitchen') {
@@ -47,6 +47,7 @@ export default function KitchenStockForm() {
 
 
   type UIItem = { 
+    id: string;
     item_name: string; 
     unit: string | null; 
     unit_price: number | null; 
@@ -84,6 +85,10 @@ export default function KitchenStockForm() {
   const [submitting, setSubmitting] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  
+  // Error handling
+  const [errorItemId, setErrorItemId] = useState<string | null>(null)
+  const errorBannerRef = useRef<HTMLDivElement>(null)
 
   // Fetch categories assigned to kitchen from RPC
   useEffect(() => {
@@ -92,60 +97,38 @@ export default function KitchenStockForm() {
       setLoadingCategories(true)
       try {
         if (!isConfigured || !session || !supabase) return
-        // Try RPC first
         let cats: { name: string; active: boolean }[] = []
-        try {
-          const { data, error } = await supabase.rpc('list_assigned_categories_for_role', { _role: 'kitchen' })
-          if (!error && data) {
-            cats = (data ?? [])
-              .map((r: any) => ({ name: String(r?.category_name ?? ''), active: true }))
-              .filter((c: { name: string; active: boolean }) => Boolean(c.name))
-          }
-        } catch (e) {
-          console.warn('Fetch categories failed');
+        const { data: catRows, error: catErr } = await supabase
+          .from('inventory_categories')
+          .select('name, assigned_to, is_active')
+          .eq('is_active', true)
+          .is('deleted_at', null)
+          .order('name', { ascending: true })
+        if (!catErr && Array.isArray(catRows) && catRows.length > 0) {
+          cats = (catRows as any[])
+            .filter((r: any) => isAssignedToRole(r.assigned_to, 'kitchen'))
+            .map((r: any) => ({ name: String(r?.name ?? ''), active: true }))
+            .filter((c: { name: string; active: boolean }) => Boolean(c.name))
         }
-        // Fallback to operational_records if RPC unavailable or returned empty
         if (!cats.length) {
-          const { data: catRows, error: catErr } = await supabase
-            .from('operational_records')
-            .select('id, data, original_id, version_no, created_at, status, deleted_at, entity_type')
-            .eq('status', 'approved')
-            .is('deleted_at', null)
-            // removed: 
-            .filter('data->>type', 'eq', 'config_category')
-            .order('created_at', { ascending: false })
-          if (catErr) { setError(catErr.message); return }
-          const latestByOriginal = new Map<string, any>()
-          for (const r of (catRows ?? [])) {
-            const key = String(r?.original_id ?? r?.id)
-            const prev = latestByOriginal.get(key)
-            const currVer = Number((r as any)?.version_no ?? 0)
-            const prevVer = Number((prev as any)?.version_no ?? -1)
-            const currTs = new Date((r as any)?.created_at ?? 0).getTime()
-            const prevTs = new Date((prev as any)?.created_at ?? 0).getTime()
-            if (!prev || currVer > prevVer || (currVer === prevVer && currTs > prevTs)) {
-              latestByOriginal.set(key, r)
+          try {
+            const { data, error } = await supabase.rpc('list_assigned_categories_for_role', { _role: 'kitchen' })
+            if (!error && data) {
+              cats = (data ?? [])
+                .map((r: any) => ({ name: String(r?.category_name ?? ''), active: true }))
+                .filter((c: { name: string; active: boolean }) => Boolean(c.name))
             }
+          } catch (_) {}
+        }
+        if (!cats.length) {
+          const { data: itemCats, error: itemCatsErr } = await supabase
+            .from('inventory_items')
+            .select('category')
+            .eq('department', 'KITCHEN')
+          if (!itemCatsErr && itemCats) {
+             const unique = Array.from(new Set(itemCats.map(c => c.category))).sort()
+             cats = unique.map(c => ({ name: c, active: true }))
           }
-          const latestRows = Array.from(latestByOriginal.values())
-          // Build category list and filter by assigned_to includes kitchen
-          let tmpCats = latestRows
-            .map((r: any) => ({
-              name: String((r as any)?.data?.category_name ?? (r as any)?.data?.name ?? ''),
-              active: ((r as any)?.data?.active ?? true) !== false,
-              _assigned: (r as any)?.data?.assigned_to ?? null,
-            }))
-            .filter((c: any) => Boolean(c.name))
-          // Remove duplicates by name
-          tmpCats = tmpCats.filter((c: any, idx: number, arr: any[]) => arr.findIndex(x => x.name === c.name) === idx)
-          // Assigned_to can be array of roles or object with flags
-          cats = tmpCats.filter((c: any) => {
-            const assigned = c._assigned
-            if (Array.isArray(assigned)) return assigned.includes('kitchen')
-            if (assigned && typeof assigned === 'object') return Boolean(assigned?.kitchen)
-            // Strict filtering: if not explicitly assigned, do not show
-            return false
-          }).map((c: any) => ({ name: c.name, active: c.active }))
         }
         setCategories(cats)
         if (!activeCategory && cats.length > 0) setActiveCategory(cats[0].name)
@@ -163,75 +146,39 @@ export default function KitchenStockForm() {
       setLoadingItems(true)
       try {
         if (!isConfigured || !session || !supabase || !activeCategory) { setItems([]); return }
-        // Try RPC first (Use get_daily_stock_sheet for correct opening stock)
-        let enriched: UIItem[] = []
-        try {
-          const { data, error } = await supabase.rpc('get_daily_stock_sheet', { 
-            _role: 'kitchen',
-            _category: activeCategory,
-            _report_date: date
-          })
-          
-          if (!error && data) {
-            enriched = (data ?? []).map((r: any) => ({
-              item_name: String(r?.item_name ?? ''),
-              unit: r?.unit ?? null,
-              unit_price: typeof r?.unit_price === 'number' ? r.unit_price : Number(r?.unit_price ?? null),
-              opening_stock: typeof r?.opening_stock === 'number' ? r.opening_stock : Number(r?.opening_stock ?? null),
-              stock_in_db: Number(r?.stock_in_db ?? 0),
-              stock_out_db: Number(r?.stock_out_db ?? 0)
-            })).filter((it: any) => it.item_name)
-          } else {
-             // Fallback to old RPC if new one not applied yet
-             const { data: oldData, error: oldError } = await supabase.rpc('list_items_for_category', { _category: activeCategory })
-             if (!oldError && oldData) {
-                enriched = (oldData ?? []).map((r: any) => ({
-                  item_name: String(r?.item_name ?? ''),
-                  unit: r?.unit ?? null,
-                  unit_price: typeof r?.unit_price === 'number' ? r.unit_price : Number(r?.unit_price ?? null),
-                  opening_stock: typeof r?.opening_stock === 'number' ? r.opening_stock : Number(r?.opening_stock ?? null),
-                  stock_in_db: 0,
-                  stock_out_db: 0
-                })).filter((it: any) => it.item_name)
-             }
-          }
-        } catch (e) {
-          console.warn('Compute monthly prefetch failed');
+        
+        const { data, error } = await supabase.rpc('get_department_stock_state', { 
+            _date: date,
+            _department: 'KITCHEN',
+            _category: activeCategory
+        })
+
+        if (error) {
+            console.error('get_department_stock_state failed', error)
+            setError('Failed to fetch stock data: ' + error.message)
+            return
         }
-        // Fallback to operational_records config_item if RPC unavailable or returned empty
-        if (!enriched.length) {
-          const { data: itemRows, error: itemErr } = await supabase
-            .from('operational_records')
-            .select('id, data, original_id, version_no, created_at, status, deleted_at, entity_type')
-            .eq('status', 'approved')
-            .is('deleted_at', null)
-            .filter('data->>type', 'eq', 'config_item')
-            .filter('data->>category', 'eq', activeCategory)
-            .order('created_at', { ascending: false })
-          if (itemErr) { setError(itemErr.message); return }
-          const latestByOriginalItems = new Map<string, any>()
-          for (const r of (itemRows ?? [])) {
-            const key = String(r?.original_id ?? r?.id)
-            const prev = latestByOriginalItems.get(key)
-            const currVer = Number((r as any)?.version_no ?? 0)
-            const prevVer = Number((prev as any)?.version_no ?? -1)
-            const currTs = new Date((r as any)?.created_at ?? 0).getTime()
-            const prevTs = new Date((prev as any)?.created_at ?? 0).getTime()
-            if (!prev || currVer > prevVer || (currVer === prevVer && currTs > prevTs)) {
-              latestByOriginalItems.set(key, r)
-            }
+
+        const sheet = await supabase.rpc('get_daily_stock_sheet', { _role: 'kitchen', _category: activeCategory, _report_date: date })
+        const sheetMap = new Map<string, { unit: string | null; unit_price: number; opening_stock: number }>()
+        if (!sheet.error && Array.isArray(sheet.data)) {
+          for (const s of sheet.data as any[]) {
+            sheetMap.set(String(s.item_name), { unit: s.unit ?? null, unit_price: Number(s.unit_price ?? 0), opening_stock: Number(s.opening_stock ?? 0) })
           }
-          const latestRowsItems = Array.from(latestByOriginalItems.values())
-          enriched = latestRowsItems.map((r: any) => ({
-            item_name: String((r as any)?.data?.item_name ?? ''),
-            unit: (r as any)?.data?.unit ?? null,
-            unit_price: typeof (r as any)?.data?.unit_price === 'number' ? (r as any)?.data?.unit_price : Number((r as any)?.data?.unit_price ?? null),
-            opening_stock: null, // can be enriched later from daily records
-            stock_in_db: 0,
-            stock_out_db: 0
-          })).filter((it: any) => it.item_name)
         }
-        enriched = enriched.sort((a: any, b: any) => a.item_name.localeCompare(b.item_name))
+
+        const enriched: UIItem[] = (data || []).map((r: any) => {
+          const s = sheetMap.get(String(r.item_name))
+          return {
+            id: r.item_id,
+            item_name: r.item_name,
+            unit: (s?.unit ?? r.unit) ?? null,
+            unit_price: s?.unit_price ?? Number(r.unit_price ?? 0),
+            opening_stock: s?.opening_stock ?? Number(r.opening_stock ?? 0),
+            stock_in_db: Number(r.restocked_today ?? 0),
+            stock_out_db: Number(r.sold_today ?? 0)
+          }
+        });
         
         setItems(enriched)
         
@@ -258,22 +205,38 @@ export default function KitchenStockForm() {
 
   const handleSubmit = async () => {
     setError(null)
+    setErrorItemId(null)
     setSuccess(null)
 
     if (!staffName) {
       setError('Please select a staff member responsible for today.')
+      errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       return
     }
 
     if (!isConfigured || !session || !supabase) {
       setError('Authentication required. Please sign in.')
+      errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       return
     }
+
+    // Ensure session is active
+    const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+    if (!ok) {
+      setError('Session expired. Please sign in again to continue.');
+      return;
+    }
+
     if (!date) {
       setError('Date is required')
+      errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       return
     }
-    const records: { entity_type: string; data: KitchenStockData; financial_amount: number }[] = []
+
+    const transactions: any[] = []
+    // Determine status based on role
+    const status = (isSupervisor || isManager || isAdmin) ? 'approved' : 'pending'
+
     for (const row of items) {
       const o = Number(row.opening_stock ?? 0)
       const prevR = Number(row.stock_in_db ?? 0)
@@ -284,68 +247,77 @@ export default function KitchenStockForm() {
       const u = Number(row.unit_price ?? 0)
       const n = notesMap[row.item_name]?.trim()
 
-      // In delta mode, inputs (r, s) are the deltas themselves
-      const rDelta = r
-      const sDelta = s
+      if (r === 0 && s === 0) continue
 
-      if (rDelta === 0 && sDelta === 0) continue
-
-      // Validation check on TOTALS
       const totalRestocked = prevR + r
       const totalSold = prevS + s
       
-      if (totalSold > o + totalRestocked) { setError(`Total sold (${totalSold}) for ${row.item_name} cannot exceed opening (${o}) + total restocked (${totalRestocked})`); return }
+      if (totalSold > o + totalRestocked) { 
+          setError(`Total used (${totalSold}) for ${row.item_name} cannot exceed opening (${o}) + total restocked (${totalRestocked})`)
+          setErrorItemId(row.id)
+          errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          return 
+      }
       const closing = o + totalRestocked - totalSold
-      if (closing < 0) { setError(`Closing stock for ${row.item_name} cannot be negative`); return }
+      if (closing < 0) { 
+          setError(`Closing stock for ${row.item_name} cannot be negative`)
+          setErrorItemId(row.id)
+          errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          return 
+      }
       
-      const total = sDelta * u // Financial amount for delta
-      
-      const payload: KitchenStockData = {
-        date,
-        staff_name: staffName,
-        item_name: row.item_name,
-        opening_stock: o, // Day's opening
-        restocked: rDelta,
-        sold: sDelta,
-        closing_stock: closing, // Current closing (snapshot)
-        unit_price: u,
-        total_amount: total,
-        notes: n || undefined
-      } as any
-      records.push({
-        entity_type: 'kitchen',
-        data: payload,
-        financial_amount: total,
-        submitted_by: user?.id ?? null,
-        status: 'pending',
-      } as any)
+      if (r > 0) {
+        transactions.push({
+            item_id: row.id,
+            department: 'KITCHEN',
+            transaction_type: 'stock_restock',
+            quantity_in: r,
+            quantity_out: 0,
+            unit_price: u,
+            total_value: r * u,
+            staff_name: staffName,
+            notes: n || undefined,
+            event_date: date,
+            status: status
+        })
+      }
+      if (s > 0) {
+        transactions.push({
+            item_id: row.id,
+            department: 'KITCHEN',
+            transaction_type: 'stock_consumed', // Kitchen consumes
+            quantity_in: 0,
+            quantity_out: s,
+            unit_price: u,
+            total_value: s * u,
+            staff_name: staffName,
+            notes: n || undefined,
+            event_date: date,
+            status: status
+        })
+      }
     }
-    if (records.length === 0) {
+
+    if (transactions.length === 0) {
       setError('No new changes to submit.')
       return
     }
+
     try {
       setSubmitting(true)
       const ok = await (ensureActiveSession?.() ?? Promise.resolve(true))
       if (!ok) { setError('Session expired. Please sign in again to continue.'); setSubmitting(false); return }
-      const { data: inserted, error: insertError } = await supabase
-        .from('operational_records')
-        .insert(records)
-        .select('id')
-      if (insertError) { setError(insertError.message); return }
+
+      const insertError = await insertWithRetry('inventory_transactions', transactions)
+      if (insertError) { setError(insertError); return }
       
-      if (Array.isArray(inserted) && inserted.length > 0 && (isSupervisor || isManager || isAdmin)) {
-        for (const row of inserted) {
-          const id = (row as any)?.id
-          if (id) {
-            const { error: approveErr } = await supabase.rpc('approve_record', { _id: id })
-            if (approveErr) {}
-          }
-        }
+      if (status === 'pending') {
+          setSuccess('Daily stock submitted for supervisor approval.')
+      } else {
+          setSuccess('Daily stock updated successfully.')
       }
-      setSuccess('Daily stock submitted for supervisor approval.')
       
-      // Reset inputs and refresh to show updated "prev" values
+      // Reset inputs and refresh
       setRestockedMap({})
       setSoldMap({})
       setNotesMap({})
@@ -355,6 +327,30 @@ export default function KitchenStockForm() {
       setSubmitting(false)
     }
   }
+
+  async function insertWithRetry(table: string, rows: any[]) {
+    let attempt = 0
+    while (attempt < 3) {
+      const { error } = await supabase!.from(table).insert(rows)
+      if (!error) return null
+      attempt += 1
+      await new Promise(r => setTimeout(r, 400 * attempt))
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true))
+      if (!ok) return 'Session expired. Please sign in again to continue.'
+    }
+    return 'Failed to submit. Please try again.'
+  }
+
+  useEffect(() => {
+    if (errorItemId) {
+      const el = document.getElementById(`row-${errorItemId}`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      if (el) {
+        const input = el.querySelector('input[type="number"]') as HTMLInputElement | null
+        input?.focus()
+      }
+    }
+  }, [errorItemId])
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-500">
@@ -489,6 +485,7 @@ export default function KitchenStockForm() {
                     soldMap={soldMap}
                     notesMap={notesMap}
                     disabled={submitting}
+                    errorItemId={errorItemId}
                     soldLabel="Consumed"
                     onChangeRestocked={handleChangeRestocked}
                     onChangeSold={handleChangeSold}

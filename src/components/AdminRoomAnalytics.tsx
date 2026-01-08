@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
+import { useAuth } from '../context/AuthContext';
+import { toast } from 'sonner';
 import { Card } from './ui/Card';
 import { Button } from './ui/Button';
 import { IconBarChart, IconSearch } from './ui/Icons';
@@ -16,6 +18,7 @@ interface RoomAnalytics {
 }
 
 export default function AdminRoomAnalytics() {
+  const { ensureActiveSession } = useAuth();
   const [analytics, setAnalytics] = useState<RoomAnalytics[]>([]);
   const [loading, setLoading] = useState(false);
   const [startDate, setStartDate] = useState(
@@ -29,6 +32,14 @@ export default function AdminRoomAnalytics() {
     setLoading(true);
     try {
       if (!supabase) throw new Error('Supabase client not initialized');
+
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) {
+        toast.error('Session expired. Please sign in again.');
+        setLoading(false);
+        return;
+      }
+
       const { data, error } = await supabase.rpc('get_room_analytics', {
         _start_date: startDate,
         _end_date: endDate
@@ -36,8 +47,9 @@ export default function AdminRoomAnalytics() {
 
       if (error) throw error;
       setAnalytics(data || []);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching analytics:', error);
+      toast.error(error.message || 'Failed to fetch analytics');
     } finally {
       setLoading(false);
     }

@@ -76,15 +76,47 @@ export default function ManagerFinancials() {
       setLoading(true);
       setError(null);
       try {
-        const { data, error } = await supabase
+        // Calculate date range
+        let start: string, end: string;
+        if (activeTab === 'daily') {
+          start = `${date}T00:00:00`;
+          end = `${date}T23:59:59`;
+        } else {
+          // Monthly
+          const [y, m] = month.split('-').map(Number);
+          const startDate = new Date(y, m - 1, 1);
+          const endDate = new Date(y, m, 0); // Last day of month
+          start = startDate.toISOString(); // UTC
+          end = endDate.toISOString(); // UTC
+          // Adjust for local if needed, but simple ISO string usually sufficient for created_at comparison
+          // For event_date (date type), we just need the YYYY-MM-DD part
+        }
+
+        const dateOnlyStart = start.slice(0, 10);
+        const dateOnlyEnd = end.slice(0, 10);
+
+        // 1. Fetch Front Desk records (Legacy/Rooms) from operational_records
+        const { data: opsData, error: opsError } = await supabase
           .from('operational_records')
           .select('*')
-          .eq('status', 'approved');
+          .eq('entity_type', 'front_desk') // Only fetch Front Desk
+          .eq('status', 'approved')
+          .gte('created_at', start) // Approximation, ideally use data->date
+          .lte('created_at', end);
 
-        if (error) throw error;
+        if (opsError) throw opsError;
 
-        // Parse and ensure numbers
-        const safeRecords = (data ?? []).map((r: any) => ({
+        // 2. Fetch Inventory Ledger (Bar, Kitchen, Store)
+        const { data: ledgerData, error: ledgerError } = await supabase
+          .from('v_inventory_ledger')
+          .select('*')
+          .gte('event_date', dateOnlyStart)
+          .lte('event_date', dateOnlyEnd);
+
+        if (ledgerError) throw ledgerError;
+
+        // 3. Normalize and Combine
+        const safeOps = (opsData ?? []).map((r: any) => ({
           id: r.id,
           entity_type: r.entity_type,
           status: r.status,
@@ -92,7 +124,54 @@ export default function ManagerFinancials() {
           financial_amount: Number(r.financial_amount ?? 0),
           created_at: r.created_at,
         }));
-        setRecords(safeRecords);
+
+        const safeLedger = (ledgerData ?? []).map((l: any) => {
+            // Map ledger to OperationalRecord shape
+            let entity_type = 'unknown';
+            let financial_amount = 0;
+            const data: any = { 
+                item_name: l.item_name, 
+                quantity: Math.abs(l.quantity_change),
+                date: l.event_date 
+            };
+
+            if (l.department === 'STORE') {
+                entity_type = 'storekeeper';
+                if (l.event_type === 'ISSUED_TO_DEPT') {
+                    data.type = 'stock_issued';
+                    // We don't have 'issued_to' in ledger, but getCollection handles it via item assignment
+                } else if (l.event_type === 'SUPPLIER_RESTOCK') {
+                    data.type = 'stock_restock';
+                }
+            } else if (l.department === 'BAR') {
+                entity_type = 'bar';
+                if (l.event_type === 'SOLD') {
+                    financial_amount = Number(l.total_value ?? 0);
+                }
+            } else if (l.department === 'KITCHEN') {
+                entity_type = 'kitchen';
+                if (l.event_type === 'SOLD') {
+                    financial_amount = Number(l.total_value ?? 0);
+                }
+            }
+
+            return {
+                id: l.record_id,
+                entity_type,
+                status: 'approved',
+                data,
+                financial_amount,
+                created_at: l.created_at || l.event_date
+            };
+        });
+
+        // Filter out irrelevant ledger entries (e.g. internal moves that don't affect financials directly in this view?)
+        // ManagerFinancials uses:
+        // - storekeeper stock_issued (Expenditure)
+        // - bar/kitchen financial_amount (Income)
+        // safeLedger already prepares these.
+
+        setRecords([...safeOps, ...safeLedger]);
       } catch (err: any) {
         setError(err.message);
       } finally {
@@ -100,37 +179,44 @@ export default function ManagerFinancials() {
       }
     }
     fetchData();
-  }, [isManager, isAdmin, refreshKey]);
+  }, [isManager, isAdmin, refreshKey, activeTab, date, month]);
 
   // Process data to build maps and calculate stats
-  const configMaps = useMemo(() => {
-    const itemMap: Record<string, ConfigItem> = {};
-    const categoryMap: Record<string, ConfigCategory> = {};
+  // Now fetching config from new tables independently
+  const [configMaps, setConfigMaps] = useState<{itemMap: Record<string, ConfigItem>, categoryMap: Record<string, ConfigCategory>}>({ itemMap: {}, categoryMap: {} });
 
-    // Sort simply for map building (though order doesn't strictly matter for config)
-    records.forEach(r => {
-      const type = r.data?.type;
-      if (type === 'config_category') {
-        const name = r.data.category_name ?? r.data.name;
-        if (name) {
-          categoryMap[name] = {
-            name,
-            assigned_to: r.data.assigned_to
-          };
+  useEffect(() => {
+    async function fetchConfig() {
+        if (!supabase) return;
+        try {
+            // Fetch Categories
+            const { data: catData } = await supabase.from('inventory_categories').select('*').is('deleted_at', null);
+            const categoryMap: Record<string, ConfigCategory> = {};
+            (catData || []).forEach((c: any) => {
+                categoryMap[c.name] = {
+                    name: c.name,
+                    assigned_to: c.assigned_to
+                };
+            });
+
+            // Fetch Items
+            const { data: itemData } = await supabase.from('inventory_items').select('*').is('deleted_at', null);
+            const itemMap: Record<string, ConfigItem> = {};
+            (itemData || []).forEach((i: any) => {
+                itemMap[i.item_name] = {
+                    item_name: i.item_name,
+                    category: i.category,
+                    unit_price: i.unit_price ?? 0
+                };
+            });
+
+            setConfigMaps({ itemMap, categoryMap });
+        } catch (e) {
+            console.error('Error fetching config for financials:', e);
         }
-      } else if (type === 'config_item') {
-        const name = r.data.item_name;
-        if (name) {
-          itemMap[name] = {
-            item_name: name,
-            category: r.data.category,
-            unit_price: Number(r.data.unit_price ?? 0)
-          };
-        }
-      }
-    });
-    return { itemMap, categoryMap };
-  }, [records]);
+    }
+    fetchConfig();
+  }, []);
 
   const getCollection = useCallback((entityType: string, itemName?: string): string => {
     const { itemMap, categoryMap } = configMaps;

@@ -1,3 +1,4 @@
+import { Toaster } from 'sonner'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import Login from './components/Login'
 import AppShell from './components/AppShell'
@@ -52,6 +53,7 @@ export default function App() {
   return (
     <AuthProvider>
       <Root />
+      <Toaster position="top-right" richColors />
     </AuthProvider>
   )
 }

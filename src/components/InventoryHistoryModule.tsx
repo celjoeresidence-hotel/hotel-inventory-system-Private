@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
+import { useAuth } from '../context/AuthContext';
+import { toast } from 'sonner';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import { Select } from './ui/Select';
@@ -50,6 +52,7 @@ interface InventoryHistoryModuleProps {
 const PAGE_SIZE = 50;
 
 export const InventoryHistoryModule: React.FC<InventoryHistoryModuleProps> = ({ role }) => {
+  const { ensureActiveSession } = useAuth();
   // State
   const [loading, setLoading] = useState(false);
   const [records, setRecords] = useState<HistoryRecord[]>([]);
@@ -69,6 +72,10 @@ export const InventoryHistoryModule: React.FC<InventoryHistoryModuleProps> = ({ 
   useEffect(() => {
     async function fetchCats() {
       if (!supabase) return;
+      
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) return;
+
       // We can fetch distinct categories from the history view itself or from config
       // For efficiency, let's just get distinct categories from history view for this role
       // Or use a known list if available. Let's try to get distinct categories.
@@ -92,6 +99,13 @@ export const InventoryHistoryModule: React.FC<InventoryHistoryModuleProps> = ({ 
       if (!supabase) return;
       setLoading(true);
       try {
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) {
+            toast.error('Session expired. Please sign in again.');
+            setLoading(false);
+            return;
+        }
+
         // 1. Fetch Records
         const { data: listData, error: listError } = await supabase.rpc('get_inventory_history', {
           _role: role,

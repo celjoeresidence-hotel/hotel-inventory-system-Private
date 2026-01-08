@@ -41,7 +41,8 @@ export default function RoomStatusGrid({ rooms, loading }: RoomStatusGridProps) 
 
   const getHKStatusStyles = (status: string) => {
     switch (status) {
-      case 'clean': return 'text-green-600 bg-green-50 border-green-100';
+      case 'inspected': return 'text-green-700 bg-green-100 border-green-200 ring-1 ring-green-200';
+      case 'clean': return 'text-blue-600 bg-blue-50 border-blue-100';
       case 'dirty': return 'text-red-600 bg-red-50 border-red-100';
       case 'not_reported': return 'text-gray-500 bg-gray-50 border-gray-100';
       default: return 'text-gray-400';
@@ -163,8 +164,8 @@ export default function RoomStatusGrid({ rooms, loading }: RoomStatusGridProps) 
                     {room.current_guest}
                   </div>
                   {room.check_out_date && (
-                    <div className="text-xs text-red-700 pl-5">
-                      Check-out: {room.check_out_date}
+                    <div className={`text-xs pl-5 ${new Date().toISOString().split('T')[0] === room.check_out_date ? 'text-red-700 font-bold uppercase' : 'text-red-700'}`}>
+                      {new Date().toISOString().split('T')[0] === room.check_out_date ? 'DUE OUT TODAY' : `Check-out: ${room.check_out_date}`}
                     </div>
                   )}
                 </div>
@@ -187,13 +188,21 @@ export default function RoomStatusGrid({ rooms, loading }: RoomStatusGridProps) 
 
               {/* Upcoming Reservation (if not already reserved status, or in addition) */}
               {room.upcoming_reservation && room.status !== 'reserved' && (
-                <div className="bg-blue-50 p-2 rounded text-sm text-blue-900 space-y-1">
+                <div className={`p-2 rounded text-sm space-y-1 ${
+                  room.upcoming_reservation.check_in.split('T')[0] === new Date().toISOString().split('T')[0]
+                  ? 'bg-blue-100 text-blue-900 border border-blue-200'
+                  : 'bg-blue-50 text-blue-900'
+                }`}>
                   <div className="flex items-center gap-2 font-medium">
                     <IconCalendar className="w-3 h-3" />
-                    Upcoming: {room.upcoming_reservation.guest_name}
+                    {room.upcoming_reservation.check_in.split('T')[0] === new Date().toISOString().split('T')[0] ? 'ARRIVING TODAY' : 'Upcoming:'} {room.upcoming_reservation.guest_name}
                   </div>
-                  <div className="text-xs text-blue-700 pl-5">
-                    Check-in: {room.upcoming_reservation.check_in}
+                  <div className={`text-xs pl-5 ${
+                    room.upcoming_reservation.check_in.split('T')[0] === new Date().toISOString().split('T')[0]
+                    ? 'font-bold text-blue-800'
+                    : 'text-blue-700'
+                  }`}>
+                    Check-in: {room.upcoming_reservation.check_in.split('T')[0] === new Date().toISOString().split('T')[0] ? 'Today' : room.upcoming_reservation.check_in}
                   </div>
                 </div>
               )}
@@ -227,10 +236,10 @@ export default function RoomStatusGrid({ rooms, loading }: RoomStatusGridProps) 
             </div>
             
             {/* Blocking Warning (Visual only here, logic in ActiveGuestList) */}
-            {room.status === 'occupied' && room.housekeeping_status !== 'clean' && (
-               <div className="mt-2 text-[10px] text-red-500 flex items-center gap-1 justify-end">
+            {room.status === 'occupied' && room.housekeeping_status !== 'inspected' && (
+               <div className="mt-2 text-[10px] text-red-500 flex items-center gap-1 justify-end font-medium">
                   <IconAlertCircle className="w-3 h-3" />
-                  Checkout Blocked
+                  Checkout Blocked (Needs Inspection)
                </div>
             )}
           </div>

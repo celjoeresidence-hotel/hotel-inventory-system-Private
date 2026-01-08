@@ -51,9 +51,10 @@ interface ItemRow {
 }
 
 export default function InventoryItemsTab() {
-  const { session, isConfigured, isSupervisor, isManager, isAdmin, role } = useAuth();
+  const { session, isConfigured, isSupervisor, isManager, isAdmin, role, ensureActiveSession } = useAuth();
   const canView = useMemo(() => Boolean(isConfigured && session && (isSupervisor || isManager || isAdmin)), [isConfigured, session, isSupervisor, isManager, isAdmin]);
-  const canEdit = useMemo(() => Boolean(isSupervisor || isManager || isAdmin || role === 'storekeeper'), [isSupervisor, isManager, isAdmin, role]);
+  const canEditItemMeta = useMemo(() => Boolean(isManager || isAdmin), [isManager, isAdmin]);
+  const canAdjustStock = useMemo(() => Boolean(isSupervisor || isManager || isAdmin || role === 'storekeeper'), [isSupervisor, isManager, isAdmin, role]);
   const canDeleteItem = useMemo(() => Boolean(isManager || isAdmin), [isManager, isAdmin]);
 
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +64,7 @@ export default function InventoryItemsTab() {
   // Delete Modal
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [wipeData, setWipeData] = useState(false);
 
   // Categories (for dropdowns)
   const [categories, setCategories] = useState<CategoryRow[]>([]);
@@ -108,41 +110,8 @@ export default function InventoryItemsTab() {
   const [editItemCollection, setEditItemCollection] = useState<string>('');
   const [editItemSaving, setEditItemSaving] = useState<boolean>(false);
 
-  // Helper: Insert and Approve
-  async function insertAndApproveStorekeeper(payload: any): Promise<string | null> {
-    setError(null);
-    setMessage(null);
-    try {
-      if (!supabase) {
-        setError('Supabase is not configured.');
-        return null;
-      }
-      const { data: inserted, error: insErr } = await supabase
-        .from('operational_records')
-        .insert({ entity_type: 'storekeeper', data: payload, financial_amount: 0 })
-        .select()
-        .single();
-      if (insErr) {
-        setError(insErr.message);
-        return null;
-      }
-      const id = (inserted as any)?.id;
-      if (!id) {
-        setError('Failed to insert record.');
-        return null;
-      }
-      const { error: aprErr } = await supabase.rpc('approve_record', { _id: id });
-      if (aprErr) {
-        setError(aprErr.message);
-        return null;
-      }
-      setMessage('Saved successfully.');
-      return String(id);
-    } catch (e: any) {
-      setError(typeof e?.message === 'string' ? e.message : 'Unexpected error');
-      return null;
-    }
-  }
+  // Helper: Insert and Approve - Removed as part of Phase 2 migration
+
 
   // Fetch Categories for Dropdowns
   useEffect(() => {
@@ -151,45 +120,26 @@ export default function InventoryItemsTab() {
       setMessage(null);
       try {
         if (!canView || !supabase) return;
+        
+        // Phase 2: Read from inventory_categories
         const { data, error } = await supabase
-          .from('operational_records')
-          .select('id, data, original_id, version_no, created_at, status, deleted_at')
-          .eq('status', 'approved')
+          .from('inventory_categories')
+          .select('*')
           .is('deleted_at', null)
-          .eq('entity_type', 'storekeeper')
-          .filter('data->>type', 'eq', 'config_category')
-          .order('created_at', { ascending: false });
+          .order('name');
+          
         if (error) {
           setError(error.message);
           return;
         }
-        const rows = (data ?? []);
-        const latestByOriginal = new Map<string, any>();
-        for (const r of rows) {
-          const key = String(r?.original_id ?? r?.id);
-          const prev = latestByOriginal.get(key);
-          const currVer = Number(r?.version_no ?? 0);
-          const prevVer = Number(prev?.version_no ?? -1);
-          const currTs = new Date(r?.created_at ?? 0).getTime();
-          const prevTs = new Date(prev?.created_at ?? 0).getTime();
-          if (!prev || currVer > prevVer || (currVer === prevVer && currTs > prevTs)) {
-            latestByOriginal.set(key, r);
-          }
-        }
-        const latestRows = Array.from(latestByOriginal.values());
-        const list: CategoryRow[] = latestRows.map((r: any) => ({
-          id: String(r.id),
-          name: String(r.data?.category_name ?? r.data?.category ?? ''),
-          active: (r.data?.active ?? true) !== false,
-          assigned_to: Array.isArray(r.data?.assigned_to)
-            ? r.data.assigned_to
-            : typeof r.data?.assigned_to === 'object' && r.data?.assigned_to !== null
-              ? Object.entries(r.data.assigned_to)
-                 .filter(([_, v]) => v === true)
-                 .map(([k]) => k)
-              : [],
-          status: String(r.status ?? ''),
-        })).filter((c) => c.name);
+        
+        const list: CategoryRow[] = (data ?? []).map((r: any) => ({
+          id: r.id,
+          name: r.name,
+          active: r.is_active,
+          assigned_to: r.assigned_to || [],
+          status: 'approved',
+        }));
         setCategories(list);
         
         // Initialize filters if empty
@@ -208,35 +158,34 @@ export default function InventoryItemsTab() {
     async function fetchCollectionsForFilter() {
       try {
         if (!canView || !supabase || !filterCategoryName) return;
+        
+        // Find category ID
+        const category = categories.find(c => c.name === filterCategoryName);
+        if (!category) {
+            setCollectionsFilter([]);
+            return;
+        }
+
         const { data, error } = await supabase
-          .from('operational_records')
-          .select('id, data, original_id, version_no, created_at, status, deleted_at')
-          .eq('status', 'approved')
+          .from('inventory_collections')
+          .select('*')
+          .eq('category_id', category.id)
           .is('deleted_at', null)
-          .eq('entity_type', 'storekeeper')
-          .filter('data->>type', 'eq', 'config_collection')
-          .filter('data->>category', 'eq', filterCategoryName)
-          .order('created_at', { ascending: false });
+          .order('name');
+
         if (error) {
           setError(error.message);
           return;
         }
-        const rowsFilt = (data ?? []);
-        const latestByOriginalFilt = new Map<string, any>();
-        for (const r of rowsFilt) {
-          const key = String(r?.original_id ?? r?.id);
-          const prev = latestByOriginalFilt.get(key);
-          const currVer = Number(r?.version_no ?? 0);
-          const prevVer = Number(prev?.version_no ?? -1);
-          const currTs = new Date(r?.created_at ?? 0).getTime();
-          const prevTs = new Date(prev?.created_at ?? 0).getTime();
-          if (!prev || currVer > prevVer || (currVer === prevVer && currTs > prevTs)) {
-            latestByOriginalFilt.set(key, r);
-          }
-        }
-        const latestRowsFilt = Array.from(latestByOriginalFilt.values());
-        const list = latestRowsFilt.map((r: any) => ({ id: String(r.id), name: String(r.data?.collection_name ?? ''), active: (r.data?.active ?? true) !== false, status: String(r.status ?? '') })).filter((c: any) => c.name);
+        
+        const list = (data ?? []).map((r: any) => ({ 
+            id: r.id, 
+            name: r.name, 
+            active: r.is_active, 
+            status: 'approved' 
+        }));
         setCollectionsFilter(list);
+        
         if (list.length > 0 && !filterCollection) {
             setFilterCollection(list[0].name);
         } else if (list.length === 0) {
@@ -247,7 +196,7 @@ export default function InventoryItemsTab() {
       }
     }
     fetchCollectionsForFilter();
-  }, [filterCategoryName, canView]);
+  }, [filterCategoryName, canView, categories]);
 
   // Fetch Items
   useEffect(() => {
@@ -262,44 +211,30 @@ export default function InventoryItemsTab() {
           setItems([]);
           return;
         }
+
+        // Phase 2: Read from dedicated inventory_items table
         const { data, error } = await supabase
-          .from('operational_records')
-          .select('id, data, status, created_at, original_id, version_no, deleted_at')
-          .eq('status', 'approved')
+          .from('inventory_items')
+          .select('*')
+          .eq('category', filterCategoryName)
+          .eq('collection', filterCollection)
           .is('deleted_at', null)
-          .eq('entity_type', 'storekeeper')
-          .filter('data->>type', 'eq', 'config_item')
-          .filter('data->>category', 'eq', filterCategoryName)
-          .filter('data->>collection_name', 'eq', filterCollection)
           .order('created_at', { ascending: false });
+
         if (error) {
           setError(error.message);
           return;
         }
-        const rowsItems = (data ?? []);
-        const latestByOriginalItems = new Map<string, any>();
-        for (const r of rowsItems) {
-          const key = String(r?.original_id ?? r?.id);
-          const prev = latestByOriginalItems.get(key);
-          const currVer = Number(r?.version_no ?? 0);
-          const prevVer = Number(prev?.version_no ?? -1);
-          const currTs = new Date(r?.created_at ?? 0).getTime();
-          const prevTs = new Date(prev?.created_at ?? 0).getTime();
-          if (!prev || currVer > prevVer || (currVer === prevVer && currTs > prevTs)) {
-            latestByOriginalItems.set(key, r);
-          }
-        }
-        const latestRowsItems = Array.from(latestByOriginalItems.values());
-        const baseItems: ItemRow[] = latestRowsItems.map((r: any) => ({
-          id: String(r.id),
-          item_name: String(r.data?.item_name ?? ''),
-          unit: r.data?.unit ?? null,
-          unit_price: typeof r.data?.unit_price === 'number' ? r.data.unit_price : (r.data?.unit_price != null ? Number(r.data.unit_price) : null),
+
+        const baseItems: ItemRow[] = (data || []).map((r: any) => ({
+          id: r.id,
+          item_name: r.item_name,
+          unit: r.unit,
+          unit_price: r.unit_price,
           opening_stock: null,
           last_adjusted: null,
-        })).filter((it) => it.item_name);
+        }));
 
-        // Fetch current stock from authoritative view
         const stockMap = new Map<string, number>();
         try {
             const { data: stockData, error: stockErr } = await supabase
@@ -312,9 +247,39 @@ export default function InventoryItemsTab() {
                 for (const r of (stockData as any[])) {
                     stockMap.set(r.item_name, Number(r.current_stock ?? 0));
                 }
+            } else {
+                // Fallback: aggregate from v_inventory_ledger if inventory_catalog_view is unavailable
+                const itemNames = baseItems.map(it => it.item_name);
+                if (itemNames.length > 0) {
+                  const { data: ledgerRows, error: ledgerErr } = await supabase
+                    .from('v_inventory_ledger')
+                    .select('item_name, quantity_change')
+                    .eq('department', 'STORE')
+                    .in('item_name', itemNames);
+                  if (!ledgerErr && ledgerRows) {
+                    for (const row of (ledgerRows as any[])) {
+                      const key = row.item_name;
+                      const prev = stockMap.get(key) ?? 0;
+                      stockMap.set(key, prev + Number(row.quantity_change ?? 0));
+                    }
+                  }
+                }
             }
-        } catch (err) {
-            console.error('Failed to fetch stock levels', err);
+        } catch (err: any) {
+            // Fallback path if the view is missing
+            const itemNames = baseItems.map(it => it.item_name);
+            if (itemNames.length > 0) {
+              const { data: ledgerRows } = await supabase
+                .from('v_inventory_ledger')
+                .select('item_name, quantity_change')
+                .eq('department', 'STORE')
+                .in('item_name', itemNames);
+              for (const row of ((ledgerRows ?? []) as any[])) {
+                const key = row.item_name;
+                const prev = stockMap.get(key) ?? 0;
+                stockMap.set(key, prev + Number(row.quantity_change ?? 0));
+              }
+            }
         }
 
         const results: ItemRow[] = baseItems.map(it => ({
@@ -334,44 +299,83 @@ export default function InventoryItemsTab() {
   useEffect(() => { setPage(1); }, [searchTerm, filterCategoryName, filterCollection]);
 
   async function handleAddItem() {
-    if (!canEdit) return;
+    if (!canEditItemMeta) return;
     if (!addItemName.trim() || !filterCategoryName || !filterCollection) return;
     setSavingItem(true);
-    const itemPayload = {
-      type: 'config_item',
-      category: filterCategoryName,
-      collection_name: filterCollection,
-      item_name: addItemName.trim(),
-      unit: addItemUnit.trim(),
-      unit_price: parseFloat(addItemUnitPrice) || 0,
-      active: true,
-    };
-    const newId = await insertAndApproveStorekeeper(itemPayload);
-    if (newId && addOpeningQty > 0) {
-      const stockPayload = {
-        type: 'opening_stock',
-        item_name: addItemName.trim(),
-        category: filterCategoryName,
-        collection_name: filterCollection,
-        quantity: addOpeningQty,
-        date: addOpeningDate || new Date().toISOString().slice(0, 10),
-        note: addOpeningNote || 'Initial opening stock',
-      };
-      await insertAndApproveStorekeeper(stockPayload);
+    
+    try {
+        if (!supabase) { setError('Supabase is not configured.'); return; }
+
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) {
+            setError('Session expired. Please sign in again to continue.');
+            setSavingItem(false);
+            return;
+        }
+
+        // Phase 2: Write to inventory_items
+        const { data: newItem, error: itemErr } = await supabase
+            .from('inventory_items')
+            .insert({
+                item_name: addItemName.trim(),
+                category: filterCategoryName,
+                collection: filterCollection,
+                unit: addItemUnit.trim(),
+                unit_price: parseFloat(addItemUnitPrice) || 0,
+                active: true
+            })
+            .select()
+            .single();
+
+        if (itemErr) {
+            setError(itemErr.message);
+            return;
+        }
+
+        // Add opening stock if provided
+        if (newItem && addOpeningQty > 0) {
+            const { error: stockErr } = await supabase
+                .from('inventory_transactions')
+                .insert({
+                    item_id: newItem.id,
+                    department: 'STORE', // Default to STORE for setup
+                    transaction_type: 'opening_stock',
+                    quantity_in: addOpeningQty,
+                    unit_price: newItem.unit_price,
+                    total_value: (addOpeningQty * (newItem.unit_price || 0)),
+                    staff_name: session?.user?.email || 'System',
+                    notes: addOpeningNote || 'Initial opening stock',
+                    event_date: addOpeningDate || new Date().toISOString().slice(0, 10),
+                    status: 'approved'
+                });
+            
+            if (stockErr) {
+                console.error('Failed to add opening stock', stockErr);
+                // We don't rollback item creation here but warn user
+                setError('Item created but failed to add opening stock: ' + stockErr.message);
+            }
+        }
+
+        setAddItemOpen(false);
+        setAddItemName('');
+        setAddItemUnit('');
+        setAddItemUnitPrice('');
+        setAddOpeningQty(0);
+        setAddOpeningDate('');
+        setAddOpeningNote('');
+        setItemsReloadKey(k => k + 1);
+        setMessage('Item created successfully.');
+
+    } catch (e: any) {
+        setError(typeof e?.message === 'string' ? e.message : 'Unexpected error');
+    } finally {
+        setSavingItem(false);
     }
-    setSavingItem(false);
-    setAddItemOpen(false);
-    setAddItemName('');
-    setAddItemUnit('');
-    setAddItemUnitPrice('');
-    setAddOpeningQty(0);
-    setAddOpeningDate('');
-    setAddOpeningNote('');
-    setItemsReloadKey(k => k + 1);
   }
 
   async function handleBulkDelete() {
     if (!canDeleteItem || selectedItemIds.size === 0) return;
+    setWipeData(false);
     setShowDeleteConfirm(true);
   }
   
@@ -380,13 +384,38 @@ export default function InventoryItemsTab() {
     try {
       if (!supabase) { setError('Supabase is not configured.'); return; }
       
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) {
+        setError('Session expired. Please sign in again to continue.');
+        setIsDeleting(false);
+        return;
+      }
+
       const ids = Array.from(selectedItemIds);
       let successCount = 0;
       let failCount = 0;
 
-      // Process sequentially to ensure all are handled
+      // Phase 4: Fix Deletion Flow
+      // We process sequentially or in batch.
       for (const id of ids) {
-        const { error: delErr } = await supabase.rpc('delete_record', { _id: id });
+        let delErr;
+        
+        if (wipeData && isAdmin) {
+            // Hard Wipe (Cascade via Foreign Key)
+            const { error } = await supabase
+                .from('inventory_items')
+                .delete()
+                .eq('id', id);
+            delErr = error;
+        } else {
+            // Standard Soft Delete
+            const { error } = await supabase
+                .from('inventory_items')
+                .update({ deleted_at: new Date().toISOString() })
+                .eq('id', id);
+            delErr = error;
+        }
+
         if (delErr) {
             console.error(`Failed to delete ${id}`, delErr);
             failCount++;
@@ -399,7 +428,7 @@ export default function InventoryItemsTab() {
       setItemsReloadKey((k) => k + 1);
       
       if (failCount > 0) {
-          setError(`Deleted ${successCount} items. Failed to delete ${failCount} items (they may be in use).`);
+          setError(`Deleted ${successCount} items. Failed to delete ${failCount} items.`);
       } else {
           setMessage(`Successfully deleted ${successCount} items.`);
       }
@@ -412,21 +441,36 @@ export default function InventoryItemsTab() {
   }
 
   async function handleAdjustStock() {
-    if (!canEdit) return;
+    if (!canAdjustStock) return;
     if (!adjustItem) return;
     try {
       if (!supabase) { setError('Supabase is not configured.'); return; }
       
-      const stockPayload = {
-        type: 'opening_stock',
-        item_name: adjustItem.item_name,
-        category: filterCategoryName,
-        collection_name: filterCollection,
-        quantity: adjustQuantity,
-        date: adjustDate || new Date().toISOString().slice(0, 10),
-        note: adjustReason || 'Stock adjustment',
-      };
-      await insertAndApproveStorekeeper(stockPayload);
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) {
+        setError('Session expired. Please sign in again to continue.');
+        return;
+      }
+
+      const { error } = await supabase
+        .from('inventory_transactions')
+        .insert({
+            item_id: adjustItem.id,
+            department: 'STORE',
+            transaction_type: 'adjustment', // or 'opening_stock' correction
+            quantity_in: adjustQuantity >= 0 ? adjustQuantity : 0,
+            quantity_out: adjustQuantity < 0 ? Math.abs(adjustQuantity) : 0,
+            unit_price: adjustItem.unit_price || 0,
+            total_value: (Math.abs(adjustQuantity) * (adjustItem.unit_price || 0)),
+            staff_name: session?.user?.email || 'System',
+            notes: adjustReason || 'Stock adjustment',
+            event_date: adjustDate || new Date().toISOString().slice(0, 10)
+        });
+
+      if (error) {
+        setError(error.message);
+        return;
+      }
       
       setAdjustOpen(false);
       setAdjustItem(null);
@@ -441,31 +485,33 @@ export default function InventoryItemsTab() {
   }
 
   async function handleUpdateItem() {
-    if (!canEdit) return;
+    if (!canEditItemMeta) return;
     if (!editItemTarget || !editItemName.trim()) return;
     setEditItemSaving(true);
     try {
         if (!supabase) { setError('Supabase is not configured.'); return; }
+
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) {
+            setError('Session expired. Please sign in again to continue.');
+            setEditItemSaving(false);
+            return;
+        }
         
-        // Use edit_config_record RPC
-        const { data: newVersionId, error: editErr } = await supabase.rpc('edit_config_record', { 
-            _previous_version_id: editItemTarget.id, 
-            _data: { 
+        // Phase 2: Update inventory_items
+        const { error: editErr } = await supabase
+            .from('inventory_items')
+            .update({
                 item_name: editItemName.trim(),
                 unit: editItemUnit.trim(),
                 unit_price: parseFloat(editItemUnitPrice) || 0,
                 category: editItemCategory || filterCategoryName,
-                collection_name: editItemCollection || filterCollection
-            } 
-        });
+                collection: editItemCollection || filterCollection,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', editItemTarget.id);
         
         if (editErr) { setError(editErr.message); return; }
-        
-        const newId: any = typeof newVersionId === 'string' ? newVersionId : (newVersionId?.id ?? newVersionId);
-        if (newId) {
-            const { error: aprErr } = await supabase.rpc('approve_record', { _id: newId });
-            if (aprErr) { setError(aprErr.message); return; }
-        }
         
         setEditItemOpen(false);
         setItemsReloadKey(k => k + 1);
@@ -512,7 +558,7 @@ export default function InventoryItemsTab() {
             <div className="flex gap-2">
                 <Button 
                     onClick={() => setAddItemOpen(true)} 
-                    disabled={!filterCategoryName || !filterCollection}
+                    disabled={!canEditItemMeta || !filterCategoryName || !filterCollection}
                 >
                     <IconPlus className="w-4 h-4 mr-2" />
                     Add Item
@@ -629,42 +675,44 @@ export default function InventoryItemsTab() {
                                             )}
                                         </div>
                                     </TableCell>
-                                    {canEdit && (
                                     <TableCell className="text-right">
                                         <div className="flex justify-end gap-2">
-                                            <Button 
-                                                variant="ghost" 
-                                                size="sm" 
-                                                className="h-8 w-8 p-0"
-                                                onClick={() => {
-                                                    setEditItemTarget(item);
-                                                    setEditItemName(item.item_name);
-                                                    setEditItemUnit(item.unit || '');
-                                                    setEditItemUnitPrice(String(item.unit_price || ''));
-                                                    setEditItemCategory(filterCategoryName);
-                                                    setEditItemCollection(filterCollection);
-                                                    setEditItemOpen(true);
-                                                }}
-                                                title="Edit Item"
-                                            >
-                                                <IconEdit className="w-4 h-4 text-gray-500" />
-                                            </Button>
-                                            <Button 
-                                                variant="ghost" 
-                                                size="sm" 
-                                                className="h-8 w-8 p-0"
-                                                onClick={() => {
-                                                    setAdjustItem(item);
-                                                    setAdjustQuantity(item.opening_stock || 0);
-                                                    setAdjustOpen(true);
-                                                }}
-                                                title="Adjust Stock"
-                                            >
-                                                <IconHistory className="w-4 h-4 text-gray-500" />
-                                            </Button>
+                                            {canEditItemMeta && (
+                                              <Button 
+                                                  variant="ghost" 
+                                                  size="sm" 
+                                                  className="h-8 w-8 p-0"
+                                                  onClick={() => {
+                                                      setEditItemTarget(item);
+                                                      setEditItemName(item.item_name);
+                                                      setEditItemUnit(item.unit || '');
+                                                      setEditItemUnitPrice(String(item.unit_price || ''));
+                                                      setEditItemCategory(filterCategoryName);
+                                                      setEditItemCollection(filterCollection);
+                                                      setEditItemOpen(true);
+                                                  }}
+                                                  title="Edit Item"
+                                              >
+                                                  <IconEdit className="w-4 h-4 text-gray-500" />
+                                              </Button>
+                                            )}
+                                            {canAdjustStock && (
+                                              <Button 
+                                                  variant="ghost" 
+                                                  size="sm" 
+                                                  className="h-8 w-8 p-0"
+                                                  onClick={() => {
+                                                      setAdjustItem(item);
+                                                      setAdjustQuantity(item.opening_stock || 0);
+                                                      setAdjustOpen(true);
+                                                  }}
+                                                  title="Adjust Stock"
+                                              >
+                                                  <IconHistory className="w-4 h-4 text-gray-500" />
+                                              </Button>
+                                            )}
                                         </div>
                                     </TableCell>
-                                    )}
                                 </TableRow>
                             ))
                         )}
@@ -686,7 +734,27 @@ export default function InventoryItemsTab() {
             title="Delete Items"
             message={`Are you sure you want to delete ${selectedItemIds.size} items? This action cannot be undone.`}
             loading={isDeleting}
-        />
+        >
+            {isAdmin && (
+                <div className="mt-4 p-3 bg-red-50 border border-red-100 rounded-md">
+                    <div className="flex items-start gap-2">
+                        <Checkbox 
+                            checked={wipeData}
+                            onChange={(e) => setWipeData(e.target.checked)}
+                            id="wipe-data-check"
+                        />
+                        <div className="text-sm">
+                            <label htmlFor="wipe-data-check" className="font-medium text-gray-900 cursor-pointer">
+                                Permanently wipe all history
+                            </label>
+                            <p className="text-red-600 text-xs mt-1">
+                                Warning: This will permanently delete the selected items AND all their associated stock history (Transactions, Opening Stock, etc). This cannot be undone.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </DeleteConfirmationModal>
 
         {/* Add Item Modal */}
         <Modal

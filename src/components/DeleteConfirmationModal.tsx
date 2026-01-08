@@ -9,6 +9,7 @@ interface DeleteConfirmationModalProps {
   message?: string;
   itemName?: string;
   loading?: boolean;
+  children?: React.ReactNode;
 }
 
 export const DeleteConfirmationModal = ({
@@ -19,6 +20,7 @@ export const DeleteConfirmationModal = ({
   message = 'Are you sure you want to delete this item? This action cannot be undone.',
   itemName,
   loading = false,
+  children,
 }: DeleteConfirmationModalProps) => {
   return (
     <Modal
@@ -44,6 +46,7 @@ export const DeleteConfirmationModal = ({
             {itemName}
           </p>
         )}
+        {children}
       </div>
     </Modal>
   );

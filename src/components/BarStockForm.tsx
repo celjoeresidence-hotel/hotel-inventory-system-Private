@@ -1,7 +1,6 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from '../supabaseClient'
 import { useAuth } from '../context/AuthContext'
-import type { BarStockData } from '../types/bar'
 import { Card } from './ui/Card'
 import { Button } from './ui/Button'
 import { Input } from './ui/Input'
@@ -12,8 +11,10 @@ import { IconAlertCircle, IconCheckCircle, IconCoffee } from './ui/Icons'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/Table'
 import { StaffSelect } from './ui/StaffSelect'
 import { InventoryHistoryModule } from './InventoryHistoryModule'
+import { isAssignedToRole } from '../utils/assignment'
 
 interface UIItem {
+  id: string
   item_name: string
   unit: string | null
   unit_price: number | null
@@ -33,7 +34,7 @@ interface MonthlyRow {
 }
 
 export default function BarStockForm() {
-  const { role, session, isConfigured, ensureActiveSession, isSupervisor, isManager, isAdmin, user } = useAuth()
+  const { role, session, isConfigured, ensureActiveSession, isSupervisor, isManager, isAdmin } = useAuth()
 
   // Role gating
   if (role !== 'bar') {
@@ -82,7 +83,9 @@ export default function BarStockForm() {
 
   const [submitting, setSubmitting] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
+  const [errorItemId, setErrorItemId] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const errorBannerRef = useRef<HTMLDivElement>(null)
 
   // Reset pagination/search on tab/category change
   useEffect(() => {
@@ -121,59 +124,38 @@ export default function BarStockForm() {
       setLoadingCategories(true)
       try {
         if (!isConfigured || !session || !supabase) return
-        
         let cats: { name: string; active: boolean }[] = []
-        try {
-          const { data, error } = await supabase.rpc('list_assigned_categories_for_role', { _role: 'bar' })
-          if (!error && data) {
-            cats = (data ?? [])
-              .map((r: any) => ({ name: String(r?.category_name ?? ''), active: true }))
-              .filter((c: { name: string; active: boolean }) => Boolean(c.name))
-          }
-        } catch (e) {
-          console.warn('Fetch categories failed');
+        const { data: catRows, error: catErr } = await supabase
+          .from('inventory_categories')
+          .select('name, assigned_to, is_active')
+          .eq('is_active', true)
+          .is('deleted_at', null)
+          .order('name', { ascending: true })
+        if (!catErr && Array.isArray(catRows) && catRows.length > 0) {
+          cats = (catRows as any[])
+            .filter((r: any) => isAssignedToRole(r.assigned_to, 'bar'))
+            .map((r: any) => ({ name: String(r?.name ?? ''), active: true }))
+            .filter((c: { name: string; active: boolean }) => Boolean(c.name))
         }
-
         if (!cats.length) {
-          const { data: catRows, error: catErr } = await supabase
-            .from('operational_records')
-            .select('id, data, original_id, version_no, created_at, status, deleted_at')
-            .eq('status', 'approved')
-            .is('deleted_at', null)
-            .filter('data->>type', 'eq', 'config_category')
-            .order('created_at', { ascending: false })
-            
-          if (catErr) { setError(catErr.message); return }
-          
-          const latestByOriginal = new Map<string, any>()
-          for (const r of (catRows ?? [])) {
-            const key = String(r?.original_id ?? r?.id)
-            const prev = latestByOriginal.get(key)
-            const currVer = Number((r as any)?.version_no ?? 0)
-            const prevVer = Number((prev as any)?.version_no ?? -1)
-            const currTs = new Date((r as any)?.created_at ?? 0).getTime()
-            const prevTs = new Date((prev as any)?.created_at ?? 0).getTime()
-            if (!prev || currVer > prevVer || (currVer === prevVer && currTs > prevTs)) {
-              latestByOriginal.set(key, r)
+          try {
+            const { data, error } = await supabase.rpc('list_assigned_categories_for_role', { _role: 'bar' })
+            if (!error && data) {
+              cats = (data ?? [])
+                .map((r: any) => ({ name: String(r?.category_name ?? ''), active: true }))
+                .filter((c: { name: string; active: boolean }) => Boolean(c.name))
             }
+          } catch (_) {}
+        }
+        if (!cats.length) {
+          const { data: itemCats, error: itemCatsErr } = await supabase
+            .from('inventory_items')
+            .select('category')
+            .eq('department', 'BAR')
+          if (!itemCatsErr && itemCats) {
+             const unique = Array.from(new Set(itemCats.map(c => c.category))).sort()
+             cats = unique.map(c => ({ name: c, active: true }))
           }
-          
-          let tmpCats = Array.from(latestByOriginal.values())
-            .map((r: any) => ({
-              name: String(r?.data?.category_name ?? r?.data?.name ?? ''),
-              active: (r?.data?.active ?? true) !== false,
-              _assigned: r?.data?.assigned_to ?? null,
-            }))
-            .filter((c: any) => c.name)
-
-          tmpCats = tmpCats.filter((c: any, idx: number, arr: any[]) => arr.findIndex(x => x.name === c.name) === idx)
-          
-          cats = tmpCats.filter((c: any) => {
-            const assigned = c._assigned
-            if (Array.isArray(assigned)) return assigned.includes('bar')
-            if (assigned && typeof assigned === 'object') return Boolean(assigned?.bar)
-            return false
-          }).map((c: any) => ({ name: c.name, active: c.active }))
         }
         
         setCategories(cats)
@@ -185,7 +167,7 @@ export default function BarStockForm() {
     fetchCategories()
   }, [isConfigured, session])
 
-  // Fetch Items & Daily Logic
+  // Fetch items for active category (Daily)
   useEffect(() => {
     if (activeTab !== 'daily') return
     async function fetchItems() {
@@ -194,96 +176,39 @@ export default function BarStockForm() {
       try {
         if (!isConfigured || !session || !supabase || !activeCategory) { setItems([]); return }
         
-        // 1. Get Base Items & Opening Stock via Optimized RPC
-        let computedItems: UIItem[] = []
-        try {
-          const { data, error } = await supabase.rpc('get_daily_stock_sheet', { 
-            _role: 'bar', 
-            _category: activeCategory,
-            _report_date: date 
-          })
+        const { data, error } = await supabase.rpc('get_department_stock_state', { 
+            _date: date,
+            _department: 'BAR',
+            _category: activeCategory
+        })
 
-          if (!error && data) {
-            computedItems = (data ?? []).map((r: any) => ({
-              item_name: String(r?.item_name ?? ''),
-              unit: r?.unit ?? null,
-              unit_price: typeof r?.unit_price === 'number' ? r.unit_price : Number(r?.unit_price ?? null),
-              opening_stock: typeof r?.opening_stock === 'number' ? r.opening_stock : Number(r?.opening_stock ?? null),
-              stock_in_db: Number(r?.stock_in_db ?? 0),
-              stock_out_db: Number(r?.stock_out_db ?? 0)
-            })).filter((it: any) => it.item_name)
-          } else {
-            // Fallback if new RPC fails (e.g. migration not applied)
-            console.warn('get_daily_stock_sheet failed, falling back to legacy fetch', error)
-            throw new Error('RPC not available')
-          }
-        } catch (err) {
-            // Fallback: Fetch items + calculate opening stock manually (Old Way)
-            let enriched: UIItem[] = []
-            try {
-                const { data, error } = await supabase.rpc('list_items_for_category', { _category: activeCategory })
-                if (!error && data) {
-                    enriched = (data ?? []).map((r: any) => ({
-                    item_name: String(r?.item_name ?? ''),
-                    unit: r?.unit ?? null,
-                    unit_price: typeof r?.unit_price === 'number' ? r.unit_price : Number(r?.unit_price ?? null),
-                    opening_stock: 0, // Will be filled below
-                    stock_in_db: 0,
-                    stock_out_db: 0
-                    })).filter((it: any) => it.item_name)
-                }
-            } catch (e) {
-              console.warn('Legacy fetch failed');
-            }
-
-            if (!enriched.length) {
-                // ... fetch from operational_records ...
-                const { data: itemRows } = await supabase
-                    .from('operational_records')
-                    .select('id, data, original_id, version_no, created_at, status, deleted_at')
-                    .eq('status', 'approved')
-                    .is('deleted_at', null)
-                    .filter('data->>type', 'eq', 'config_item')
-                    .filter('data->>category', 'eq', activeCategory)
-                    .order('created_at', { ascending: false })
-                
-                 const latestByOriginal = new Map<string, any>()
-                 for (const r of (itemRows ?? [])) {
-                    const key = String(r?.original_id ?? r?.id)
-                    const prev = latestByOriginal.get(key)
-                    const currVer = Number((r as any)?.version_no ?? 0)
-                    const prevVer = Number((prev as any)?.version_no ?? -1)
-                    if (!prev || currVer > prevVer) latestByOriginal.set(key, r)
-                 }
-                 enriched = Array.from(latestByOriginal.values()).map((r: any) => ({
-                    item_name: String(r?.data?.item_name ?? ''),
-                    unit: r?.data?.unit ?? null,
-                    unit_price: Number(r?.data?.unit_price ?? 0),
-                    opening_stock: 0,
-                    stock_in_db: 0,
-                    stock_out_db: 0
-                 })).filter((it: any) => it.item_name)
-            }
-            
-            // 2. Compute Opening Stock via Ledger RPC
-            const { data: openingData } = await supabase
-                .rpc('get_expected_opening_stock_batch', { 
-                    _role: 'storekeeper', 
-                    _report_date: date 
-                })
-            const openingMap = new Map<string, number>()
-            if (openingData) {
-                for (const row of (openingData as any[])) {
-                    openingMap.set(row.item_name, Number(row.opening_stock ?? 0))
-                }
-            }
-            computedItems = enriched.map(it => ({
-                ...it,
-                opening_stock: openingMap.get(it.item_name) ?? 0
-            }))
+        if (error) {
+            console.error('get_department_stock_state failed', error)
+            setError('Failed to fetch stock data: ' + error.message)
+            return
         }
+
+        const sheet = await supabase.rpc('get_daily_stock_sheet', { _role: 'bar', _category: activeCategory, _report_date: date })
+        const sheetMap = new Map<string, { unit: string | null; unit_price: number; opening_stock: number }>()
+        if (!sheet.error && Array.isArray(sheet.data)) {
+          for (const s of sheet.data as any[]) {
+            sheetMap.set(String(s.item_name), { unit: s.unit ?? null, unit_price: Number(s.unit_price ?? 0), opening_stock: Number(s.opening_stock ?? 0) })
+          }
+        }
+
+        const computedItems: UIItem[] = (data || []).map((r: any) => {
+          const s = sheetMap.get(String(r.item_name))
+          return {
+            id: r.item_id,
+            item_name: r.item_name,
+            unit: (s?.unit ?? r.unit) ?? null,
+            unit_price: s?.unit_price ?? Number(r.unit_price ?? 0),
+            opening_stock: s?.opening_stock ?? Number(r.opening_stock ?? 0),
+            stock_in_db: Number(r.restocked_today ?? 0),
+            stock_out_db: Number(r.sold_today ?? 0)
+          }
+        });
         
-        computedItems.sort((a, b) => a.item_name.localeCompare(b.item_name))
         setItems(computedItems)
 
         // Reset inputs for delta mode
@@ -314,115 +239,106 @@ export default function BarStockForm() {
       try {
         if (!isConfigured || !session || !supabase || !activeCategory) { setMonthlyRows([]); return }
         
-        // 1. Get Items & Config (for units/baseline)
-        const itemConfigMap = new Map<string, { unit: string | null; opening_stock: number }>()
-        
-        try {
-          // Fetch config items to get units and static baselines
-          const { data: configData } = await supabase
-            .from('operational_records')
-            .select('data')
-            .eq('status', 'approved')
-            .is('deleted_at', null)
-            .filter('data->>type', 'eq', 'config_item')
-            .filter('data->>category', 'eq', activeCategory)
-            
-          if (configData) {
-            for (const r of configData) {
-              const d = r.data
-              if (d?.item_name) {
-                 itemConfigMap.set(d.item_name, {
-                   unit: d.unit ?? null,
-                   opening_stock: Number(d.opening_stock ?? 0)
-                 })
-              }
-            }
-          }
-        } catch (e) {
-          console.warn('Compute monthly prefetch failed');
-        }
-
-        let baseItems: string[] = []
-        // Use RPC or fallback
-        try {
-          const { data } = await supabase.rpc('list_items_for_category', { _category: activeCategory })
-          if (data) {
-             baseItems = data.map((x: any) => x.item_name)
-             // Update map from RPC if available (RPC might be fresher or different)
-             for (const x of data) {
-               if (!itemConfigMap.has(x.item_name)) {
-                 itemConfigMap.set(x.item_name, { unit: x.unit, opening_stock: x.opening_stock })
-               }
-             }
-          }
-        } catch (e) {
-          console.warn('list_items_for_category RPC failed');
-        }
-        
-        if (baseItems.length === 0) {
-           baseItems = Array.from(itemConfigMap.keys())
-        }
-        baseItems.sort()
-
         const range = getMonthRange(month)
+
+        // 1. Get Opening Stock at start of month using RPC
+        // This gives us the baseline state as of the morning of the 1st of the month
+        const { data: openingData, error: openingError } = await supabase.rpc('get_department_stock_state', { 
+            _date: range.start,
+            _department: 'BAR',
+            _category: activeCategory
+        })
+
+        if (openingError) {
+            console.error('Monthly opening fetch failed', openingError)
+            setError('Failed to fetch monthly data')
+            return
+        }
+
+        const itemsStart = (openingData || []) as any[]
+        const itemIds = itemsStart.map(x => x.item_id)
+
+        if (itemIds.length === 0) {
+            setMonthlyRows([])
+            return
+        }
+
+        // 2. Fetch all transactions for this month for these items
+        const { data: txData, error: txError } = await supabase
+            .from('inventory_transactions')
+            .select('item_id, transaction_type, quantity_in, quantity_out, total_value')
+            .eq('department', 'BAR')
+            .gte('event_date', range.start)
+            .lte('event_date', range.end)
+            .in('item_id', itemIds)
+            .eq('status', 'approved')
+
+        if (txError) {
+            console.error('Monthly tx fetch failed', txError)
+            setError('Failed to fetch monthly transactions')
+            return
+        }
+
+        // 3. Aggregate
         const rows: MonthlyRow[] = []
+        const txMap = new Map<string, { restocked: number, sold: number, value: number }>()
 
-        for (const itemName of baseItems) {
-           // Get Opening Stock at start of month
-           // 1. Baseline
-           // 2. Transactions before start of month
-           
-           const { data: allTx } = await supabase
-             .from('operational_records')
-             .select('data, created_at')
-             .eq('entity_type', 'bar')
-             .eq('status', 'approved')
-             .is('deleted_at', null)
-             .filter('data->>item_name', 'eq', itemName)
-           
-           const config = itemConfigMap.get(itemName)
-           const staticBaseline = config?.opening_stock ?? 0
-           const unit = config?.unit ?? null
-           
-           let preMonthRestock = 0
-           let preMonthSold = 0
-           let inMonthRestock = 0
-           let inMonthSold = 0
-           let totalSalesValue = 0
+        for (const tx of (txData || [])) {
+            const key = tx.item_id
+            const curr = txMap.get(key) || { restocked: 0, sold: 0, value: 0 }
+            
+            if (tx.transaction_type === 'stock_restock' || tx.transaction_type === 'opening_stock') {
+                curr.restocked += Number(tx.quantity_in)
+            } else {
+                // sold, consumed, stock_issued (though stock_issued is usually incoming for bar? no, outgoing from store)
+                // For BAR:
+                // stock_restock = incoming
+                // sold = outgoing
+                // stock_issued = outgoing? No, stock_issued is usually FROM store TO bar.
+                // But here we are querying BAR transactions.
+                // If the store issued stock TO bar, does it appear as a transaction with department='BAR'?
+                // Currently, Storekeeper writes 'stock_issued' with department='STORE'.
+                // Does that write a corresponding 'stock_restock' for BAR?
+                // Not yet. That's a key architectural point.
+                // Ideally, Storekeeper issuing stock should auto-create a restock for Bar.
+                // But currently Bar manually enters restock.
+                // So we just look at what Bar entered.
+                // Bar enters 'stock_restock' (incoming) and 'sold' (outgoing).
+                
+                if (tx.quantity_in > 0) {
+                     curr.restocked += Number(tx.quantity_in)
+                }
+                if (tx.quantity_out > 0) {
+                     curr.sold += Number(tx.quantity_out)
+                     // Only count value for sold items? Or total value of transactions?
+                     // total_sales_value usually implies sales.
+                     if (tx.transaction_type === 'sold') {
+                         curr.value += Number(tx.total_value)
+                     }
+                }
+            }
+            txMap.set(key, curr)
+        }
 
-           if (allTx) {
-             for (const tx of allTx) {
-               const d = tx.data?.date
-               const r = Number(tx.data?.restocked ?? 0)
-               const s = Number(tx.data?.sold ?? 0)
-               const val = Number(tx.data?.total_amount ?? 0)
-               
-               if (d < range.start) {
-                 preMonthRestock += r
-                 preMonthSold += s
-               } else if (d >= range.start && d <= range.end) {
-                 inMonthRestock += r
-                 inMonthSold += s
-                 totalSalesValue += val
-               }
-             }
-           }
-           
-           const openingMonth = Math.max(0, staticBaseline + preMonthRestock - preMonthSold)
-           const closingMonth = Math.max(0, openingMonth + inMonthRestock - inMonthSold)
-           
-           rows.push({
-             item_name: itemName,
-             unit: unit, 
-             opening_month_start: openingMonth,
-             total_restocked: inMonthRestock,
-             total_sold: inMonthSold,
-             closing_month_end: closingMonth,
-             total_sales_value: totalSalesValue
-           })
+        for (const item of itemsStart) {
+            const tx = txMap.get(item.item_id) || { restocked: 0, sold: 0, value: 0 }
+            const open = Number(item.opening_stock ?? 0)
+            const close = open + tx.restocked - tx.sold
+            
+            rows.push({
+                item_name: item.item_name,
+                unit: item.unit,
+                opening_month_start: open,
+                total_restocked: tx.restocked,
+                total_sold: tx.sold,
+                closing_month_end: Math.max(0, close),
+                total_sales_value: tx.value
+            })
         }
         
+        rows.sort((a, b) => a.item_name.localeCompare(b.item_name))
         setMonthlyRows(rows)
+
       } finally {
         setLoadingMonthly(false)
       }
@@ -446,6 +362,13 @@ export default function BarStockForm() {
     setError(null)
     setSuccess(null)
 
+    // Ensure session is active
+    const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+    if (!ok) {
+      setError('Session expired. Please sign in again to continue.');
+      return;
+    }
+
     if (!staffName) {
       setError('Please select a staff member responsible for today.')
       return
@@ -454,7 +377,8 @@ export default function BarStockForm() {
     if (!isConfigured || !session || !supabase) { setError('Authentication required.'); return }
     if (!date) { setError('Date is required'); return }
 
-    const records: { entity_type: string; data: BarStockData; financial_amount: number }[] = []
+    const transactions: any[] = []
+    const status = (isSupervisor || isManager || isAdmin) ? 'approved' : 'pending'
     
     for (const row of items) {
       const o = Number(row.opening_stock ?? 0)
@@ -466,70 +390,84 @@ export default function BarStockForm() {
       const u = Number(row.unit_price ?? 0)
       const n = notesMap[row.item_name]?.trim()
       
-      // In delta mode, inputs (r, s) are the deltas themselves
-      const rDelta = r
-      const sDelta = s
-
-      if (rDelta === 0 && sDelta === 0) continue
+      if (r === 0 && s === 0) continue
 
       // Validation check on TOTALS
       const totalRestocked = prevR + r
       const totalSold = prevS + s
       
-      if (totalSold > o + totalRestocked) { setError(`Total sold (${totalSold}) for ${row.item_name} cannot exceed opening (${o}) + total restocked (${totalRestocked})`); return }
+      if (totalSold > o + totalRestocked) { 
+        setError(`Total sold (${totalSold}) for ${row.item_name} cannot exceed opening (${o}) + total restocked (${totalRestocked})`)
+        setErrorItemId(row.id)
+        return 
+      }
       const closing = o + totalRestocked - totalSold
-      if (closing < 0) { setError(`Closing stock for ${row.item_name} cannot be negative`); return }
+      if (closing < 0) { 
+        setError(`Closing stock for ${row.item_name} cannot be negative`)
+        setErrorItemId(row.id)
+        return 
+      }
       
-      const total = sDelta * u // Financial amount for this specific transaction (delta)
-      
-      const payload: BarStockData = {
-        date,
-        staff_name: staffName,
-        item_name: row.item_name,
-        opening_stock: o, // This is the day's opening stock
-        restocked: rDelta,
-        sold: sDelta,
-        closing_stock: closing, // Current closing stock (snapshot)
-        unit_price: u,
-        total_amount: total,
-        notes: n || undefined
-      } as any
-      
-      records.push({ 
-        entity_type: 'bar', 
-        data: payload, 
-        financial_amount: total,
-        submitted_by: user?.id ?? null,
-        status: 'pending'
-      } as any)
+      if (r > 0) {
+        transactions.push({
+            item_id: row.id,
+            department: 'BAR',
+            transaction_type: 'stock_restock',
+            quantity_in: r,
+            quantity_out: 0,
+            unit_price: u,
+            total_value: r * u,
+            staff_name: staffName,
+            notes: n || undefined,
+            event_date: date,
+            status: status
+        })
+      }
+      if (s > 0) {
+        transactions.push({
+            item_id: row.id,
+            department: 'BAR',
+            transaction_type: 'sold', // Bar sells
+            quantity_in: 0,
+            quantity_out: s,
+            unit_price: u,
+            total_value: s * u,
+            staff_name: staffName,
+            notes: n || undefined,
+            event_date: date,
+            status: status
+        })
+      }
     }
 
-    if (records.length === 0) {
+    if (transactions.length === 0) {
       setError('No new changes to submit.')
+      errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       return
     }
 
     try {
       setSubmitting(true)
       const ok = await (ensureActiveSession?.() ?? Promise.resolve(true))
-      if (!ok) { setError('Session expired. Please sign in again to continue.'); setSubmitting(false); return }
-      const { data: inserted, error: insertError } = await supabase
-        .from('operational_records')
-        .insert(records)
-        .select('id')
-      if (insertError) { setError(insertError.message); return }
-      
-      if (Array.isArray(inserted) && inserted.length > 0 && (isSupervisor || isManager || isAdmin)) {
-        for (const row of inserted) {
-          const id = (row as any)?.id
-          if (id) {
-            const { error: approveErr } = await supabase.rpc('approve_record', { _id: id })
-            if (approveErr) {}
-          }
-        }
+      if (!ok) { 
+          setError('Session expired. Please sign in again to continue.')
+          setSubmitting(false)
+          errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          return 
       }
       
-      setSuccess('Updates submitted successfully.')
+      const insertError = await insertWithRetry('inventory_transactions', transactions)
+      if (insertError) { 
+          setError(insertError)
+          errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          return 
+      }
+      
+      if (status === 'pending') {
+          setSuccess('Bar stock submitted for supervisor approval.')
+      } else {
+          setSuccess('Bar stock updated successfully.')
+      }
       
       // Reset inputs and refresh to show updated "prev" values
       setRestockedMap({})
@@ -541,6 +479,30 @@ export default function BarStockForm() {
       setSubmitting(false)
     }
   }
+
+  async function insertWithRetry(table: string, rows: any[]) {
+    let attempt = 0
+    while (attempt < 3) {
+      const { error } = await supabase!.from(table).insert(rows)
+      if (!error) return null
+      attempt += 1
+      await new Promise(r => setTimeout(r, 400 * attempt))
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true))
+      if (!ok) return 'Session expired. Please sign in again to continue.'
+    }
+    return 'Failed to submit. Please try again.'
+  }
+
+  useEffect(() => {
+    if (errorItemId) {
+      const el = document.getElementById(`row-${errorItemId}`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      if (el) {
+        const input = el.querySelector('input[type="number"]') as HTMLInputElement | null
+        input?.focus()
+      }
+    }
+  }, [errorItemId])
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-500">
@@ -703,6 +665,8 @@ export default function BarStockForm() {
                     soldMap={soldMap}
                     notesMap={notesMap}
                     disabled={submitting}
+                    errorItemId={errorItemId}
+                    soldLabel="Sold"
                     onChangeRestocked={handleChangeRestocked}
                     onChangeSold={handleChangeSold}
                     onChangeNotes={handleChangeNotes}

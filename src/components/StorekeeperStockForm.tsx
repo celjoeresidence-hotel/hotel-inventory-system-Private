@@ -24,10 +24,13 @@ import { SearchInput } from './ui/SearchInput'
 import { Pagination } from './ui/Pagination'
 import { StaffSelect } from './ui/StaffSelect'
 import { InventoryHistoryModule } from './InventoryHistoryModule'
+import { isAssignedToRole } from '../utils/assignment'
 
 type UIItem = { 
+  id: string;
   item_name: string; 
   unit: string | null; 
+  unit_price: number | null;
   opening_stock: number;
   stock_in_db: number;
   stock_out_db: number;
@@ -43,7 +46,7 @@ type MonthlyRow = {
 }
 
 export default function StorekeeperStockForm() {
-  const { role, session, isConfigured, ensureActiveSession, user } = useAuth()
+  const { role, session, isConfigured, ensureActiveSession } = useAuth()
 
   // Categories and collections
   const [categories, setCategories] = useState<{ name: string; active: boolean }[]>([])
@@ -115,53 +118,61 @@ export default function StorekeeperStockForm() {
     return filteredMonthly.slice(start, start + PAGE_SIZE)
   }, [filteredMonthly, page])
 
-  if (role !== 'storekeeper') {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] p-6 animate-in fade-in">
-        <Card className="max-w-md w-full p-8 text-center border-error-light shadow-lg">
-          <div className="bg-error-light text-error w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-            <IconAlertCircle className="w-8 h-8" />
-          </div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h2>
-          <p className="text-gray-500">You must be storekeeper staff to access this page.</p>
-        </Card>
-      </div>
-    )
-  }
-
-  // Fetch ALL approved categories (storekeeper sees everything)
+  // Fetch categories (Storekeeper sees assigned categories, or all if none assigned)
   useEffect(() => {
+    if (role !== 'storekeeper') return; 
+    
     async function fetchCategories() {
       setError(null)
       setLoadingCategories(true)
       try {
         if (!isConfigured || !session || !supabase) return
-        const { data, error } = await supabase
-          .from('operational_records')
-          .select('id, data, original_id, version_no, created_at, status, deleted_at')
-          .eq('status', 'approved')
-          .is('deleted_at', null)
-          .filter('data->>type', 'eq', 'config_category')
-          .order('created_at', { ascending: false })
-        if (error) { setError(error.message); return }
-        const latestByOriginal = new Map<string, any>()
-        for (const r of (data ?? [])) {
-          const key = String((r as any)?.original_id ?? (r as any)?.id)
-          const prev = latestByOriginal.get(key)
-          const currVer = Number((r as any)?.version_no ?? 0)
-          const prevVer = Number((prev as any)?.version_no ?? -1)
-          const currTs = new Date((r as any)?.created_at ?? 0).getTime()
-          const prevTs = new Date((prev as any)?.created_at ?? 0).getTime()
-          if (!prev || currVer > prevVer || (currVer === prevVer && currTs > prevTs)) {
-            latestByOriginal.set(key, r)
+        
+        let cats: { name: string; active: boolean }[] = []
+        
+        // Phase 2: Try fetching from inventory_categories with assignment check
+        try {
+          const { data: catRows, error: catErr } = await supabase
+            .from('inventory_categories')
+            .select('name, assigned_to, is_active')
+            .eq('is_active', true)
+            .is('deleted_at', null)
+            .order('name', { ascending: true })
+
+          if (!catErr && Array.isArray(catRows) && catRows.length > 0) {
+            console.log('StorekeeperStockForm: All categories:', catRows);
+            cats = (catRows as any[])
+              .filter((r: any) => {
+                const assigned = isAssignedToRole(r.assigned_to, 'storekeeper');
+                console.log(`Category ${r.name} assigned to storekeeper?`, assigned, r.assigned_to);
+                return assigned;
+              })
+              .map((r: any) => ({ name: String(r?.name ?? ''), active: true }))
+              .filter((c: { name: string; active: boolean }) => Boolean(c.name))
+          } else {
+            console.log('StorekeeperStockForm: No categories found or error', catErr);
           }
+        } catch (e) {
+          console.warn('Fetch categories from inventory_categories failed', e);
         }
-        let cats = Array.from(latestByOriginal.values())
-          .map((r: any) => ({ name: String(r?.data?.category_name ?? r?.data?.name ?? ''), active: (r?.data?.active ?? true) !== false }))
-          .filter((c: any) => c.name)
-        // de-duplicate by name
-        cats = cats.filter((c: any, idx: number, arr: any[]) => arr.findIndex(x => x.name === c.name) === idx)
-        setCategories(cats)
+
+        // Fallback: If no assigned categories found, fetch all from items (legacy behavior)
+        if (cats.length === 0) {
+           const { data, error } = await supabase
+             .from('inventory_items')
+             .select('category, active')
+             .eq('active', true)
+             .is('deleted_at', null)
+             .order('category', { ascending: true })
+
+           if (!error && data) {
+             const unique = Array.from(new Set((data || []).map(r => r.category))).map(c => ({ name: c, active: true }));
+             cats = unique;
+           }
+        }
+        
+        setCategories(cats);
+        
         if (!activeCategory && cats.length > 0) setActiveCategory(cats[0].name)
       } finally { setLoadingCategories(false) }
     }
@@ -173,50 +184,24 @@ export default function StorekeeperStockForm() {
     async function fetchCollections() {
       setError(null)
       if (!isConfigured || !session || !supabase || !activeCategory) { setCollections([]); setSelectedCollection(''); return }
+      
+      // Phase 2: Fetch distinct collections from inventory_items
       const { data, error } = await supabase
-        .from('operational_records')
-        .select('id, data, original_id, version_no, created_at, status, deleted_at')
-        .eq('status', 'approved')
+        .from('inventory_items')
+        .select('collection')
+        .eq('category', activeCategory)
+        .eq('active', true)
         .is('deleted_at', null)
-        .filter('data->>type', 'eq', 'config_collection')
-        .filter('data->>category', 'eq', activeCategory)
-        .order('created_at', { ascending: false })
+        .order('collection', { ascending: true })
+
       if (error) { setError(error.message); return }
-      const latestByOriginal = new Map<string, any>()
-      for (const r of (data ?? [])) {
-        const key = String((r as any)?.original_id ?? (r as any)?.id)
-        const prev = latestByOriginal.get(key)
-        const currVer = Number((r as any)?.version_no ?? 0)
-        const prevVer = Number((prev as any)?.version_no ?? -1)
-        const currTs = new Date((r as any)?.created_at ?? 0).getTime()
-        const prevTs = new Date((prev as any)?.created_at ?? 0).getTime()
-        if (!prev || currVer > prevVer || (currVer === prevVer && currTs > prevTs)) {
-          latestByOriginal.set(key, r)
-        }
-      }
-      let cols = Array.from(latestByOriginal.values())
-        .map((r: any) => String(r?.data?.collection_name ?? ''))
-        .filter((c: any) => c)
-      cols = cols.filter((c: any, idx: number, arr: any[]) => arr.indexOf(c) === idx)
-      setCollections(cols)
-      if (!selectedCollection && cols.length > 0) setSelectedCollection('')
+      
+      const unique = Array.from(new Set((data || []).map(r => r.collection)));
+      setCollections(unique)
+      if (!selectedCollection && unique.length > 0) setSelectedCollection('')
     }
     fetchCollections()
   }, [isConfigured, session, activeCategory])
-
-  // Helper to deduplicate records by original_id (taking latest version)
-  const dedupLatest = (rows: any[]) => {
-    const seen = new Set<string>();
-    const out: any[] = [];
-    for (const r of rows ?? []) {
-      const oid = String(r?.original_id ?? r?.id ?? '');
-      if (!oid) continue;
-      if (seen.has(oid)) continue;
-      seen.add(oid);
-      out.push(r);
-    }
-    return out;
-  };
 
   // Fetch items and compute opening stock per item
   useEffect(() => {
@@ -227,134 +212,30 @@ export default function StorekeeperStockForm() {
       try {
         if (!isConfigured || !session || !supabase || !activeCategory) { setItems([]); return }
         
-        let computed: UIItem[] = []
-        let useFallback = false
-
-        // Try Optimized RPC first
-        try {
-          const { data, error } = await supabase.rpc('get_daily_stock_sheet', { 
-            _role: 'storekeeper', 
+        // Phase 2: Use get_storekeeper_stock_state RPC
+        const { data, error } = await supabase.rpc('get_storekeeper_stock_state', { 
+            _date: date,
             _category: activeCategory,
-            _report_date: date 
-          })
+            _collection: selectedCollection || null
+        })
 
-          if (!error && data) {
-            let rows = data as any[]
-            // Filter by collection if selected
-            if (selectedCollection) {
-              rows = rows.filter(r => r.collection_name === selectedCollection)
-            }
-            
-            computed = rows.map((r: any) => ({
-              item_name: String(r?.item_name ?? ''),
-              unit: r?.unit ?? null,
-              opening_stock: typeof r?.opening_stock === 'number' ? r.opening_stock : Number(r?.opening_stock ?? null),
-              stock_in_db: Number(r?.stock_in_db ?? 0),
-              stock_out_db: Number(r?.stock_out_db ?? 0)
-            })).filter((it: any) => it.item_name)
-          } else {
-            console.warn('get_daily_stock_sheet failed or missing, falling back to legacy fetch', error)
-            useFallback = true
-          }
-        } catch (err) {
-          console.warn('get_daily_stock_sheet exception', err)
-          useFallback = true
+        if (error) {
+            console.error('get_storekeeper_stock_state failed', error)
+            setError('Failed to fetch stock data: ' + error.message)
+            return
         }
 
-        if (useFallback) {
-          // 1. Fetch config items
-          let q = supabase
-            .from('operational_records')
-            .select('id, data, original_id, version_no, created_at, status, deleted_at')
-            .eq('status', 'approved')
-            .is('deleted_at', null)
-            .filter('data->>type', 'eq', 'config_item')
-            .filter('data->>category', 'eq', activeCategory)
-            .order('created_at', { ascending: false })
-          if (selectedCollection) {
-            q = q.filter('data->>collection_name', 'eq', selectedCollection)
-          }
-          const { data, error } = await q
-          if (error) { setError(error.message); return }
-          
-          const latestByOriginal = new Map<string, any>()
-          for (const r of (data ?? [])) {
-            const key = String((r as any)?.original_id ?? (r as any)?.id)
-            const prev = latestByOriginal.get(key)
-            const currVer = Number((r as any)?.version_no ?? 0)
-            const prevVer = Number((prev as any)?.version_no ?? -1)
-            const currTs = new Date((r as any)?.created_at ?? 0).getTime()
-            const prevTs = new Date((prev as any)?.created_at ?? 0).getTime()
-            if (!prev || currVer > prevVer || (currVer === prevVer && currTs > prevTs)) {
-              latestByOriginal.set(key, r)
-            }
-          }
-          
-          const base = Array.from(latestByOriginal.values())
-            .map((r: any) => ({ item_name: String(r?.data?.item_name ?? ''), unit: r?.data?.unit ?? null }))
-            .filter((it: any) => it.item_name)
-
-          // 2. Fetch opening stocks from Ledger RPC
-          const { data: openingData, error: openingError } = await supabase
-            .rpc('get_expected_opening_stock_batch', { 
-              _role: 'storekeeper', 
-              _report_date: date 
-            })
-          
-          if (openingError) {
-            console.error('Error fetching opening stock:', openingError)
-          }
-
-          const openingMap = new Map<string, number>()
-          if (openingData) {
-            for (const row of (openingData as any[])) {
-              openingMap.set(row.item_name, Number(row.opening_stock ?? 0))
-            }
-          }
-
-          // 3. Fetch today's transactions for Fallback
-          const todayRestocked: Record<string, number> = {}
-          const todayIssued: Record<string, number> = {}
-          try {
-            const { data: txData, error: txError } = await supabase.rpc('get_daily_report_details', {
-              _department: 'storekeeper',
-              _date: date
-            })
-            if (!txError && txData) {
-              for (const tx of (txData as any[])) {
-                const item = tx.item_name
-                const qty = Number(tx.quantity ?? 0)
-                const type = tx.type
-                if (type === 'stock_restock') todayRestocked[item] = (todayRestocked[item] ?? 0) + qty
-                else if (type === 'stock_issued') todayIssued[item] = (todayIssued[item] ?? 0) + qty
-              }
-            }
-          } catch (err) { console.error('Failed to fetch daily transactions', err) }
-
-          for (const it of base) {
-            const opening = openingMap.get(it.item_name) ?? 0
-            computed.push({ 
-              item_name: it.item_name, 
-              unit: it.unit ?? null, 
-              opening_stock: opening,
-              stock_in_db: todayRestocked[it.item_name] ?? 0,
-              stock_out_db: todayIssued[it.item_name] ?? 0
-            })
-          }
-        }
-        
-        // Sort by item name
-        computed.sort((a, b) => a.item_name.localeCompare(b.item_name))
+        const computed: UIItem[] = (data || []).map((r: any) => ({
+            id: r.item_id,
+            item_name: r.item_name,
+            unit: r.unit,
+            unit_price: typeof r.unit_price === 'number' ? r.unit_price : Number(r.unit_price ?? 0),
+            opening_stock: Number(r.opening_stock ?? 0),
+            stock_in_db: Number(r.restocked_today ?? 0),
+            stock_out_db: Number(r.issued_today ?? 0)
+        }));
         
         setItems(computed)
-        // Reset inputs to empty (Delta Mode)
-        // Only reset if we are loading fresh data (e.g. date change or category change)
-        // But here we are inside fetchItems which runs on dependencies.
-        // We should probably preserve inputs if we are just refreshing? 
-        // No, if date changes, inputs should clear.
-        // If category changes, inputs should clear.
-        // If just refreshing after submit, we want inputs to clear.
-        // So clearing here is safe.
         setRestockedMap({})
         setIssuedMap({})
         setNotesMap({})
@@ -388,7 +269,15 @@ export default function StorekeeperStockForm() {
     if (!date) { setError('Date is required'); return }
     if (!activeCategory) { setError('Select a category'); return }
 
-    const records: { entity_type: string; data: any; financial_amount: number }[] = []
+    // Ensure session is active
+    const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+    if (!ok) {
+      setError('Session expired. Please sign in again to continue.');
+      return;
+    }
+
+    const transactions: any[] = []
+    
     for (const row of items) {
       const rInput = Number(restockedMap[row.item_name] ?? 0)
       const iInput = Number(issuedMap[row.item_name] ?? 0)
@@ -397,78 +286,76 @@ export default function StorekeeperStockForm() {
       const opening = Number(row.opening_stock ?? 0)
       const prevRestock = Number(row.stock_in_db ?? 0)
       const prevIssued = Number(row.stock_out_db ?? 0)
-
       const totalRestock = prevRestock + rInput
-      const totalIssued = prevIssued + iInput
-      const closing = opening + totalRestock - totalIssued
+      const closing = opening + totalRestock - (prevIssued + iInput)
       
       if (rInput < 0 || iInput < 0) { setError('Quantities must be ≥ 0'); return }
-      if (totalIssued > opening + totalRestock) { setError(`Total issued for ${row.item_name} cannot exceed opening + total restocked`); return }
+      if ((prevIssued + iInput) > (opening + totalRestock)) { setError(`Total issued for ${row.item_name} cannot exceed available stock`); return }
       if (closing < 0) { setError(`Closing stock for ${row.item_name} cannot be negative`); return }
       
       if (rInput > 0) {
-        records.push({ entity_type: 'storekeeper', data: { type: 'stock_restock', item_name: row.item_name, quantity: rInput, date, staff_name: staffName, notes: note || undefined }, financial_amount: 0 })
+        transactions.push({
+            item_id: row.id,
+            department: 'STORE',
+            transaction_type: 'stock_restock',
+            quantity_in: rInput,
+            quantity_out: 0,
+            unit_price: 0, // Should be fetched from item but 0 is fine for now
+            total_value: 0,
+            staff_name: staffName,
+            notes: note || undefined,
+            event_date: date,
+            status: 'approved'
+        })
       }
       if (iInput > 0) {
-        records.push({ entity_type: 'storekeeper', data: { type: 'stock_issued', item_name: row.item_name, quantity: iInput, date, staff_name: staffName, notes: note || undefined }, financial_amount: 0 })
-      }
-      // Submit closing snapshot only if this item had changes
-      if (rInput > 0 || iInput > 0) {
-        records.push({ 
-          entity_type: 'storekeeper', 
-          data: { 
-            type: 'daily_closing_stock', 
-            item_name: row.item_name, 
-            quantity: 0, 
-            closing_stock: closing, 
-            date, 
-            staff_name: staffName, 
-            notes: note || undefined 
-          }, 
-          financial_amount: 0 
+        transactions.push({
+            item_id: row.id,
+            department: 'STORE',
+            transaction_type: 'stock_issued',
+            quantity_in: 0,
+            quantity_out: iInput,
+            unit_price: 0,
+            total_value: 0,
+            staff_name: staffName,
+            notes: note || undefined,
+            event_date: date,
+            status: 'approved'
         })
       }
     }
-    if (records.length === 0) { setError('No changes detected to submit.'); return }
+
+    if (transactions.length === 0) { setError('No changes detected to submit.'); return }
+
     try {
       setSubmitting(true)
       const ok = await (ensureActiveSession?.() ?? Promise.resolve(true))
       if (!ok) { setError('Session expired. Please sign in again to continue.'); setSubmitting(false); return }
-      const payload = records.map(r => ({ ...r, submitted_by: user?.id ?? null, status: 'pending' }))
-      const { error: rpcError } = await supabase
-        .rpc('submit_storekeeper_daily', { _records: payload })
-      if (rpcError) {
-        const chunkSize = 20
-        for (let i = 0; i < payload.length; i += chunkSize) {
-          const batch = payload.slice(i, i + chunkSize)
-          const { error: insertError } = await supabase
-            .from('operational_records')
-            .insert(batch)
-          if (insertError) { setError(insertError.message); return }
-        }
-      }
+
+      const insertError = await insertWithRetry('inventory_transactions', transactions)
+      if (insertError) { setError(insertError); return }
+      
       setSuccess('Storekeeper daily stock updated.')
       
-      // Clear inputs and refresh data
       setRestockedMap({})
       setIssuedMap({})
       setNotesMap({})
-      
-      // Trigger a re-fetch of items to update stock_in_db/stock_out_db
-      // We can do this by toggling a dependency or just calling the effect?
-      // Since fetchItems is inside useEffect, we can't call it directly.
-      // But we can force a refresh by creating a refresh trigger state?
-      // Or just reload the page? No, that's bad UX.
-      // The simplest way is to update `items` locally, but `fetchItems` is better for consistency.
-      // Let's rely on the user refreshing or add a `refreshKey` state.
-      // Actually, since we cleared the maps, the displayed Closing Stock will revert to Opening + PrevRestock - PrevIssued
-      // UNTIL the new data is fetched.
-      // So we MUST fetch new data immediately.
-      // I'll add a refresh trigger to the dependency array.
       setRefreshKey(prev => prev + 1)
-      
       window.scrollTo({ top: 0, behavior: 'smooth' })
     } finally { setSubmitting(false) }
+  }
+
+  async function insertWithRetry(table: string, rows: any[]) {
+    let attempt = 0
+    while (attempt < 3) {
+      const { error } = await supabase!.from(table).insert(rows)
+      if (!error) return null
+      attempt += 1
+      await new Promise(r => setTimeout(r, 400 * attempt))
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true))
+      if (!ok) return 'Session expired. Please sign in again to continue.'
+    }
+    return 'Failed to submit. Please try again.'
   }
 
   function getMonthRange(yyyyMM: string) {
@@ -488,113 +375,99 @@ export default function StorekeeperStockForm() {
       setLoadingMonthly(true)
       try {
         if (!isConfigured || !session || !supabase || !activeCategory) { setMonthlyRows([]); return }
-        // Fetch items in selected category and optional collection
-        let q = supabase
-          .from('operational_records')
-          .select('id, data, original_id, version_no, created_at, status, deleted_at')
-          .eq('status', 'approved')
-          .is('deleted_at', null)
-          .filter('data->>type', 'eq', 'config_item')
-          .filter('data->>category', 'eq', activeCategory)
-          .order('created_at', { ascending: false })
-        if (selectedCollection) {
-          q = q.filter('data->>collection_name', 'eq', selectedCollection)
-        }
-        const { data, error } = await q
-        if (error) { setError(error.message); return }
-        const latestByOriginal = new Map<string, any>()
-        for (const r of (data ?? [])) {
-          const key = String((r as any)?.original_id ?? (r as any)?.id)
-          const prev = latestByOriginal.get(key)
-          const currVer = Number((r as any)?.version_no ?? 0)
-          const prevVer = Number((prev as any)?.version_no ?? -1)
-          const currTs = new Date((r as any)?.created_at ?? 0).getTime()
-          const prevTs = new Date((prev as any)?.created_at ?? 0).getTime()
-          if (!prev || currVer > prevVer || (currVer === prevVer && currTs > prevTs)) {
-            latestByOriginal.set(key, r)
-          }
-        }
-        const base = Array.from(latestByOriginal.values())
-          .map((r: any) => ({ item_name: String(r?.data?.item_name ?? ''), unit: r?.data?.unit ?? null }))
-          .filter((it: any) => it.item_name)
-  
+        
         const range = getMonthRange(month)
-        const rows: MonthlyRow[] = []
-        for (const it of base) {
-          if (!supabase) { rows.push({ item_name: it.item_name, unit: it.unit ?? null, opening_month_start: 0, total_restocked: 0, total_issued: 0, closing_month_end: 0 }); continue }
-          
-          // 1. Baseline: Latest approved opening_stock
-          const { data: osRows } = await supabase
-            .from('operational_records')
-            .select('id, data, status, created_at, deleted_at')
-            .eq('status', 'approved')
-            .is('deleted_at', null)
-            .filter('data->>type', 'eq', 'opening_stock')
-            .filter('data->>item_name', 'eq', it.item_name)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            
-          const baselineRecord = osRows && osRows.length > 0 ? osRows[0] : null;
-          const baselineQty = baselineRecord ? (typeof baselineRecord.data?.quantity === 'number' ? baselineRecord.data.quantity : Number(baselineRecord.data?.quantity ?? 0)) : 0;
-          const baselineDateStr = baselineRecord ? (baselineRecord.data?.date ?? baselineRecord.created_at) : '1970-01-01';
-          const baselineDate = new Date(baselineDateStr).toISOString().slice(0, 10);
 
-          // 2. Fetch ALL transactions after baseline
-          const { data: txRows } = await supabase
-            .from('operational_records')
-            .select('id, data, original_id, version_no, created_at, status, deleted_at')
-            .eq('status', 'approved')
-            .is('deleted_at', null)
-            .in('data->>type', ['stock_restock', 'stock_issued'])
-            .filter('data->>item_name', 'eq', it.item_name)
-            .order('created_at', { ascending: false })
-          
-          const uniqueTx = dedupLatest(txRows ?? [])
+        // 1. Get Opening Stock at start of month using RPC
+        const { data: openingData, error: openingError } = await supabase.rpc('get_storekeeper_stock_state', { 
+            _date: range.start,
+            _category: activeCategory,
+            _collection: selectedCollection || null
+        })
 
-          let preMonthRestock = 0;
-          let preMonthIssued = 0;
-          let inMonthRestock = 0;
-          let inMonthIssued = 0;
-
-          const startIso = range.start;
-          const endIso = range.end;
-
-          for (const tx of uniqueTx) {
-            const txDate = tx.data?.date ?? tx.created_at.slice(0, 10);
-            if (txDate < baselineDate) continue; // Ignore transactions before baseline
-
-            const qty = Number(tx.data?.quantity ?? 0);
-            const type = tx.data?.type;
-
-            if (txDate < startIso) {
-              // Pre-month
-              if (type === 'stock_restock') preMonthRestock += qty;
-              else if (type === 'stock_issued') preMonthIssued += qty;
-            } else if (txDate >= startIso && txDate <= endIso) {
-              // In-month
-              if (type === 'stock_restock') inMonthRestock += qty;
-              else if (type === 'stock_issued') inMonthIssued += qty;
-            }
-          }
-
-          const openingMonthStart = Math.max(0, baselineQty + preMonthRestock - preMonthIssued);
-          const closingMonthEnd = Math.max(0, openingMonthStart + inMonthRestock - inMonthIssued);
-
-          rows.push({ 
-            item_name: it.item_name, 
-            unit: it.unit ?? null, 
-            opening_month_start: openingMonthStart, 
-            total_restocked: inMonthRestock, 
-            total_issued: inMonthIssued, 
-            closing_month_end: closingMonthEnd 
-          })
+        if (openingError) {
+            console.error('Monthly opening fetch failed', openingError)
+            setError('Failed to fetch monthly data')
+            return
         }
+
+        const itemsStart = (openingData || []) as any[]
+        const itemIds = itemsStart.map(x => x.item_id)
+
+        if (itemIds.length === 0) {
+            setMonthlyRows([])
+            return
+        }
+
+        // 2. Fetch all transactions for this month for these items
+        const { data: txData, error: txError } = await supabase
+            .from('inventory_transactions')
+            .select('item_id, transaction_type, quantity_in, quantity_out')
+            .eq('department', 'STORE')
+            .gte('event_date', range.start)
+            .lte('event_date', range.end)
+            .in('item_id', itemIds)
+            .eq('status', 'approved')
+
+        if (txError) {
+            console.error('Monthly tx fetch failed', txError)
+            setError('Failed to fetch monthly transactions')
+            return
+        }
+
+        // 3. Aggregate
+        const rows: MonthlyRow[] = []
+        const txMap = new Map<string, { restocked: number, issued: number }>()
+
+        for (const tx of (txData || [])) {
+            const key = tx.item_id
+            const curr = txMap.get(key) || { restocked: 0, issued: 0 }
+            
+            if (tx.quantity_in > 0) {
+                curr.restocked += Number(tx.quantity_in)
+            }
+            if (tx.quantity_out > 0) {
+                curr.issued += Number(tx.quantity_out)
+            }
+            txMap.set(key, curr)
+        }
+
+        for (const item of itemsStart) {
+            const tx = txMap.get(item.item_id) || { restocked: 0, issued: 0 }
+            const open = Number(item.opening_stock ?? 0)
+            const close = open + tx.restocked - tx.issued
+            
+            rows.push({
+                item_name: item.item_name,
+                unit: item.unit,
+                opening_month_start: open,
+                total_restocked: tx.restocked,
+                total_issued: tx.issued,
+                closing_month_end: Math.max(0, close)
+            })
+        }
+        
         rows.sort((a, b) => a.item_name.localeCompare(b.item_name))
         setMonthlyRows(rows)
+
       } finally { setLoadingMonthly(false) }
     }
     computeMonthly()
   }, [isConfigured, session, activeCategory, selectedCollection, month, activeTab])
+
+  if (role !== 'storekeeper') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] p-6 animate-in fade-in">
+        <Card className="max-w-md w-full p-8 text-center border-error-light shadow-lg">
+          <div className="bg-error-light text-error w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+            <IconAlertCircle className="w-8 h-8" />
+          </div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h2>
+          <p className="text-gray-500">You must be storekeeper staff to access this page.</p>
+        </Card>
+      </div>
+    )
+  }
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-500">
@@ -768,7 +641,7 @@ export default function StorekeeperStockForm() {
               <>
                 <div className="overflow-x-auto border rounded-lg shadow-sm bg-white">
                   <InventoryConsumptionTable
-                    items={paginatedItems.map(i => ({ ...i, unit_price: null, opening_stock: i.opening_stock }))}
+                    items={paginatedItems}
                     restockedMap={restockedMap}
                     soldMap={issuedMap}
                     notesMap={notesMap}

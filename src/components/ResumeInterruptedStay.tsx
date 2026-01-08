@@ -16,7 +16,7 @@ interface ResumeInterruptedStayProps {
 }
 
 export default function ResumeInterruptedStay({ isOpen, onClose, rooms, onSuccess }: ResumeInterruptedStayProps) {
-  const { role } = useAuth();
+  const { role, ensureActiveSession } = useAuth();
   const [searchName, setSearchName] = useState('');
   const [credits, setCredits] = useState<any[]>([]);
   const [selectedCredit, setSelectedCredit] = useState<any | null>(null);
@@ -64,6 +64,9 @@ export default function ResumeInterruptedStay({ isOpen, onClose, rooms, onSucces
     setLoading(true);
     setError(null);
     try {
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) { setError('Session expired. Please sign in again.'); setLoading(false); return; }
+
       const credit = selectedCredit.data || {};
       const targetRoomId = roomChoice === 'same' ? rooms.find(r => r.room_number === credit.room_number)?.id : newRoomId;
       if (!targetRoomId) { setError('Select a valid room'); setLoading(false); return; }

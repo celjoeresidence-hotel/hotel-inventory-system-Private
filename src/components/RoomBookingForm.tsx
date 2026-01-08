@@ -24,7 +24,7 @@ interface RoomOption {
 }
 
 export default function RoomBookingForm() {
-  const { session, isConfigured } = useAuth();
+  const { session, isConfigured, ensureActiveSession } = useAuth();
   
   // Form State
   const [roomId, setRoomId] = useState('');
@@ -154,6 +154,12 @@ export default function RoomBookingForm() {
 
     setSubmitting(true);
     try {
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) {
+        setError('Session expired. Please sign in again to continue.');
+        return;
+      }
+
       // 1. Pre-check availability
       const { data: isAvailable, error: availError } = await supabase!
         .rpc('check_room_availability', {

@@ -16,7 +16,8 @@ import {
   IconBox,
   IconCheckSquare,
   IconAlertCircle,
-  IconCheckCircle
+  IconCheckCircle,
+  IconTrash2
 } from './ui/Icons';
 
 interface CategoryRow {
@@ -39,7 +40,7 @@ interface InventoryStructureTabProps {
 }
 
 export default function InventoryStructureTab({ onStructureChange }: InventoryStructureTabProps) {
-  const { session, isConfigured, isSupervisor, isManager, isAdmin, role } = useAuth();
+  const { session, isConfigured, isSupervisor, isManager, isAdmin, role, ensureActiveSession } = useAuth();
   const canEditStructure = Boolean(isSupervisor || isManager || isAdmin || role === 'storekeeper');
 
   const [error, setError] = useState<string | null>(null);
@@ -104,51 +105,62 @@ export default function InventoryStructureTab({ onStructureChange }: InventorySt
   const [editAssignedBar, setEditAssignedBar] = useState<boolean>(false);
   const [editAssignedStorekeeper, setEditAssignedStorekeeper] = useState<boolean>(false);
 
+  // Deletion State
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ type: 'category' | 'collection', id: string, name: string } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  function promptDeleteCategory(cat: CategoryRow) {
+    setDeleteTarget({ type: 'category', id: cat.id, name: cat.name });
+    setDeleteConfirmOpen(true);
+  }
+
+  function promptDeleteCollection(col: CollectionRow) {
+    setDeleteTarget({ type: 'collection', id: col.id, name: col.name });
+    setDeleteConfirmOpen(true);
+  }
+
+  async function executeDelete() {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    setMessage(null);
+    try {
+        if (!supabase) throw new Error('Supabase client not initialized');
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) {
+            setError('Session expired. Please sign in again.');
+            setIsDeleting(false);
+            return;
+        }
+
+        if (deleteTarget.type === 'category') {
+             const { error } = await supabase.rpc('delete_inventory_category', { _id: deleteTarget.id });
+             if (error) throw error;
+             setCategoriesReloadKey(k => k + 1);
+             if (selectedCategoryName === deleteTarget.name) {
+                setSelectedCategoryName('');
+             }
+        } else {
+             const { error } = await supabase.rpc('delete_inventory_collection', { _id: deleteTarget.id });
+             if (error) throw error;
+             setCollectionsReloadKey(k => k + 1);
+        }
+        
+        setMessage(`Successfully deleted ${deleteTarget.type} "${deleteTarget.name}"`);
+        setTimeout(() => setMessage(null), 3000);
+        
+        setDeleteConfirmOpen(false);
+        setDeleteTarget(null);
+    } catch (e: any) {
+        setError(e.message);
+    } finally {
+        setIsDeleting(false);
+    }
+  }
   // Mobile scroll ref
   const collectionsRef = useRef<HTMLButtonElement>(null);
 
-  async function insertAndApproveStorekeeper(payload: any): Promise<string | null> {
-    setError(null);
-    setMessage(null);
-    try {
-      if (!supabase) {
-        setError('Supabase is not configured.');
-        return null;
-      }
-      const { data: inserted, error: insErr } = await supabase
-        .from('operational_records')
-        .insert({ entity_type: 'storekeeper', data: payload, financial_amount: 0 })
-        .select()
-        .single();
-      if (insErr) {
-        setError(insErr.message);
-        return null;
-      }
-      const id = (inserted as any)?.id;
-      if (!id) {
-        setError('Failed to insert record.');
-        return null;
-      }
-      const { error: aprErr } = await supabase.rpc('approve_record', { _id: id });
-      if (aprErr) {
-        setError(aprErr.message);
-        return null;
-      }
-      setMessage('Saved successfully.');
-      return String(id);
-    } catch (e: any) {
-      setError(typeof e?.message === 'string' ? e.message : 'Unexpected error');
-      return null;
-    }
-  }
-
-  // Helper: Insert Config Record (no auto-approve?) - The original code had insertConfigRecord separately but used insertAndApproveStorekeeper for Category.
-  // Wait, saveCollection used insertConfigRecord. Let's check if insertConfigRecord approves.
-  // In original code: insertConfigRecord inserted but did NOT call approve_record.
-  // BUT saveCategory used insertAndApproveStorekeeper.
-  // I should stick to the original logic.
-  // async function insertConfigRecord(payload: any) { ... } REMOVED UNUSED FUNCTION
-
+  // Fetch Categories
   useEffect(() => {
     async function fetchCategories() {
       setError(null);
@@ -156,44 +168,23 @@ export default function InventoryStructureTab({ onStructureChange }: InventorySt
       try {
         if (!isConfigured || !session || !supabase) return;
         const { data, error } = await supabase
-          .from('operational_records')
-          .select('id, data, original_id, version_no, created_at, status, deleted_at')
-          .eq('status', 'approved')
+          .from('inventory_categories')
+          .select('*')
           .is('deleted_at', null)
-          .eq('entity_type', 'storekeeper')
-          .filter('data->>type', 'eq', 'config_category')
-          .order('created_at', { ascending: false });
+          .order('name');
+        
         if (error) {
           setError(error.message);
           return;
         }
-        const rows = (data ?? []);
-        const latestByOriginal = new Map<string, any>();
-        for (const r of rows) {
-          const key = String(r?.original_id ?? r?.id);
-          const prev = latestByOriginal.get(key);
-          const currVer = Number(r?.version_no ?? 0);
-          const prevVer = Number(prev?.version_no ?? -1);
-          const currTs = new Date(r?.created_at ?? 0).getTime();
-          const prevTs = new Date(prev?.created_at ?? 0).getTime();
-          if (!prev || currVer > prevVer || (currVer === prevVer && currTs > prevTs)) {
-            latestByOriginal.set(key, r);
-          }
-        }
-        const latestRows = Array.from(latestByOriginal.values());
-        const list: CategoryRow[] = latestRows.map((r: any) => ({
-          id: String(r.id),
-          name: String(r.data?.category_name ?? r.data?.category ?? ''),
-          active: (r.data?.active ?? true) !== false,
-          assigned_to: Array.isArray(r.data?.assigned_to)
-            ? r.data.assigned_to
-            : typeof r.data?.assigned_to === 'object' && r.data?.assigned_to !== null
-              ? Object.entries(r.data.assigned_to)
-                 .filter(([_, v]) => v === true)
-                 .map(([k]) => k)
-              : [],
-          status: String(r.status ?? ''),
-        })).filter((c) => c.name);
+
+        const list: CategoryRow[] = (data ?? []).map((r: any) => ({
+          id: r.id,
+          name: r.name,
+          active: r.is_active,
+          assigned_to: r.assigned_to || [],
+          status: 'approved', // New tables are always authoritative/approved
+        }));
         setCategories(list);
         if (!selectedCategoryName && list.length > 0) {
           setSelectedCategoryName(list[0].name);
@@ -213,41 +204,39 @@ export default function InventoryStructureTab({ onStructureChange }: InventorySt
             setCollections([]);
             return;
         }
+        
+        // First get the category ID
+        const category = categories.find(c => c.name === selectedCategoryName);
+        if (!category) {
+            setCollections([]);
+            return;
+        }
+
         const { data, error } = await supabase
-          .from('operational_records')
-          .select('id, data, original_id, version_no, created_at, status, deleted_at')
-          .eq('status', 'approved')
+          .from('inventory_collections')
+          .select('*')
+          .eq('category_id', category.id)
           .is('deleted_at', null)
-          .eq('entity_type', 'storekeeper')
-          .filter('data->>type', 'eq', 'config_collection')
-          .filter('data->>category', 'eq', selectedCategoryName)
-          .order('created_at', { ascending: false });
+          .order('name');
+
         if (error) {
           setError(error.message);
           return;
         }
-        const rowsSel = (data ?? []);
-        const latestByOriginalSel = new Map<string, any>();
-        for (const r of rowsSel) {
-          const key = String(r?.original_id ?? r?.id);
-          const prev = latestByOriginalSel.get(key);
-          const currVer = Number(r?.version_no ?? 0);
-          const prevVer = Number(prev?.version_no ?? -1);
-          const currTs = new Date(r?.created_at ?? 0).getTime();
-          const prevTs = new Date(prev?.created_at ?? 0).getTime();
-          if (!prev || currVer > prevVer || (currVer === prevVer && currTs > prevTs)) {
-            latestByOriginalSel.set(key, r);
-          }
-        }
-        const latestRowsSel = Array.from(latestByOriginalSel.values());
-        const list = latestRowsSel.map((r: any) => ({ id: String(r.id), name: String(r.data?.collection_name ?? ''), active: (r.data?.active ?? true) !== false, status: String(r.status ?? '') })).filter((c: any) => c.name);
+
+        const list = (data ?? []).map((r: any) => ({ 
+            id: r.id, 
+            name: r.name, 
+            active: r.is_active, 
+            status: 'approved' 
+        }));
         setCollections(list);
       } finally {
         setLoadingCollections(false);
       }
     }
     fetchCollectionsForSelected();
-  }, [selectedCategoryName, isConfigured, session, collectionsReloadKey]);
+  }, [selectedCategoryName, isConfigured, session, collectionsReloadKey, categories]);
 
   async function saveCategory() {
     if (!newCategoryName.trim()) return;
@@ -256,27 +245,75 @@ export default function InventoryStructureTab({ onStructureChange }: InventorySt
     if (newCategoryAssignedKitchen) assigned.push('kitchen');
     if (newCategoryAssignedBar) assigned.push('bar');
     if (newCategoryAssignedStorekeeper) assigned.push('storekeeper');
-    await insertAndApproveStorekeeper({ type: 'config_category', category_name: newCategoryName.trim(), active: true, assigned_to: assigned });
-    setSavingCategory(false);
-    setNewCategoryName('');
-    setNewCategoryAssignedKitchen(false);
-    setNewCategoryAssignedBar(false);
-    setNewCategoryAssignedStorekeeper(false);
-    setAddCategoryOpen(false);
-    setCategoriesReloadKey((k) => k + 1);
-    onStructureChange?.();
+    
+    try {
+        if (!supabase) throw new Error('Supabase client not initialized');
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) {
+            setError('Session expired. Please sign in again.');
+            setSavingCategory(false);
+            return;
+        }
+
+        const { error } = await supabase
+            .from('inventory_categories')
+            .insert({ 
+                name: newCategoryName.trim(), 
+                is_active: true, 
+                assigned_to: assigned 
+            });
+
+        if (error) throw error;
+
+        setNewCategoryName('');
+        setNewCategoryAssignedKitchen(false);
+        setNewCategoryAssignedBar(false);
+        setNewCategoryAssignedStorekeeper(false);
+        setAddCategoryOpen(false);
+        setCategoriesReloadKey((k) => k + 1);
+        onStructureChange?.();
+    } catch (e: any) {
+        setError(e.message);
+    } finally {
+        setSavingCategory(false);
+    }
   }
 
   async function saveCollection() {
     if (!newCollectionName.trim() || !selectedCategoryName) return;
     setSavingCollection(true);
-    // Using insertAndApproveStorekeeper to ensure it appears immediately
-    await insertAndApproveStorekeeper({ type: 'config_collection', category: selectedCategoryName, collection_name: newCollectionName.trim(), active: true });
-    setSavingCollection(false);
-    setNewCollectionName('');
-    setAddCollectionOpen(false);
-    setCollectionsReloadKey((k) => k + 1);
-    onStructureChange?.();
+    
+    try {
+        if (!supabase) throw new Error('Supabase client not initialized');
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) {
+            setError('Session expired. Please sign in again.');
+            setSavingCollection(false);
+            return;
+        }
+
+        const category = categories.find(c => c.name === selectedCategoryName);
+        if (!category) throw new Error("Category not found");
+
+        const { error } = await supabase
+            .from('inventory_collections')
+            .insert({ 
+                name: newCollectionName.trim(), 
+                category_id: category.id, 
+                is_active: true 
+            });
+
+        if (error) throw error;
+
+        setNewCollectionName('');
+        setAddCollectionOpen(false);
+        setCollectionsReloadKey((k) => k + 1);
+        onStructureChange?.();
+    } catch (e: any) {
+        setError(e.message);
+    } finally {
+        setSavingCollection(false);
+    }
   }
 
   async function toggleCategoryActive(cat: CategoryRow) {
@@ -286,13 +323,19 @@ export default function InventoryStructureTab({ onStructureChange }: InventorySt
         setError('Supabase is not configured.');
         return;
       }
-      const { data: newVersionId, error: editErr } = await supabase.rpc('edit_config_record', { _previous_version_id: cat.id, _data: { active: !cat.active } });
-      if (editErr) { setError(editErr.message); return; }
-      const newId: any = typeof newVersionId === 'string' ? newVersionId : (newVersionId?.id ?? newVersionId);
-      if (newId) {
-        const { error: aprErr } = await supabase.rpc('approve_record', { _id: newId });
-        if (aprErr) { setError(aprErr.message); return; }
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) {
+          setError('Session expired. Please sign in again.');
+          return;
       }
+
+      const { error } = await supabase
+        .from('inventory_categories')
+        .update({ is_active: !cat.active, updated_at: new Date() })
+        .eq('id', cat.id);
+        
+      if (error) throw error;
+
       setCategoriesReloadKey((k) => k + 1);
       onStructureChange?.();
     } catch (e: any) {
@@ -307,13 +350,19 @@ export default function InventoryStructureTab({ onStructureChange }: InventorySt
         setError('Supabase is not configured.');
         return;
       }
-      const { data: newVersionId, error: editErr } = await supabase.rpc('edit_config_record', { _previous_version_id: col.id, _data: { active: !(col.active ?? true) } });
-      if (editErr) { setError(editErr.message); return; }
-      const newId: any = typeof newVersionId === 'string' ? newVersionId : (newVersionId?.id ?? newVersionId);
-      if (newId) {
-        const { error: aprErr } = await supabase.rpc('approve_record', { _id: newId });
-        if (aprErr) { setError(aprErr.message); return; }
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) {
+          setError('Session expired. Please sign in again.');
+          return;
       }
+
+      const { error } = await supabase
+        .from('inventory_collections')
+        .update({ is_active: !(col.active ?? true), updated_at: new Date() })
+        .eq('id', col.id);
+
+      if (error) throw error;
+
       setCollectionsReloadKey((k) => k + 1);
       onStructureChange?.();
     } catch (e: any) {
@@ -335,17 +384,22 @@ export default function InventoryStructureTab({ onStructureChange }: InventorySt
     if (!editCategoryTarget) return;
     try {
       if (!supabase) { setError('Supabase is not configured.'); return; }
+      
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) { setError('Session expired. Please sign in again.'); return; }
+
       const assigned: string[] = [];
       if (editAssignedKitchen) assigned.push('kitchen');
       if (editAssignedBar) assigned.push('bar');
       if (editAssignedStorekeeper) assigned.push('storekeeper');
-      const { data: newVersionId, error: editErr } = await supabase.rpc('edit_config_record', { _previous_version_id: editCategoryTarget.id, _data: { assigned_to: assigned } });
-      if (editErr) { setError(editErr.message); return; }
-      const newId: any = typeof newVersionId === 'string' ? newVersionId : (newVersionId?.id ?? newVersionId);
-      if (newId) {
-        const { error: aprErr } = await supabase.rpc('approve_record', { _id: newId });
-        if (aprErr) { setError(aprErr.message); return; }
-      }
+      
+      const { error } = await supabase
+        .from('inventory_categories')
+        .update({ assigned_to: assigned, updated_at: new Date() })
+        .eq('id', editCategoryTarget.id);
+
+      if (error) throw error;
+
       setEditCategoryOpen(false);
       setEditCategoryTarget(null);
       setCategoriesReloadKey((k) => k + 1);
@@ -354,6 +408,8 @@ export default function InventoryStructureTab({ onStructureChange }: InventorySt
       setError(typeof e?.message === 'string' ? e.message : 'Unexpected error');
     }
   }
+
+
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
@@ -470,6 +526,17 @@ export default function InventoryStructureTab({ onStructureChange }: InventorySt
                         >
                           <IconCheckSquare className="w-4 h-4" />
                         </Button>
+                        {(isManager || isAdmin) && (
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="h-8 w-8 p-0 text-red-400 hover:text-red-600 hover:bg-white/50"
+                            onClick={(e) => { e.stopPropagation(); promptDeleteCategory(cat); }}
+                            title="Delete Category"
+                          >
+                            <IconTrash2 className="w-4 h-4" />
+                          </Button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -548,15 +615,28 @@ export default function InventoryStructureTab({ onStructureChange }: InventorySt
                       </div>
                       
                       {canEditStructure && (
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
-                          className={`h-8 w-8 p-0 ${col.active ? 'text-green-600' : 'text-gray-400'}`}
-                          onClick={() => toggleCollectionActive(col)}
-                          title={col.active ? "Deactivate" : "Activate"}
-                        >
-                          <IconCheckSquare className="w-4 h-4" />
-                        </Button>
+                        <div className="flex items-center gap-1">
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className={`h-8 w-8 p-0 ${col.active ? 'text-green-600' : 'text-gray-400'}`}
+                            onClick={() => toggleCollectionActive(col)}
+                            title={col.active ? "Deactivate" : "Activate"}
+                          >
+                            <IconCheckSquare className="w-4 h-4" />
+                          </Button>
+                          {(isManager || isAdmin) && (
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              className="h-8 w-8 p-0 text-red-400 hover:text-red-600 hover:bg-white/50"
+                              onClick={() => promptDeleteCollection(col)}
+                              title="Delete Collection"
+                            >
+                              <IconTrash2 className="w-4 h-4" />
+                            </Button>
+                          )}
+                        </div>
                       )}
                     </Card>
                   ))
@@ -680,6 +760,38 @@ export default function InventoryStructureTab({ onStructureChange }: InventorySt
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Delete Confirmation Modal */}
+      <Modal
+        isOpen={deleteConfirmOpen}
+        onClose={() => setDeleteConfirmOpen(false)}
+        title={`Delete ${deleteTarget?.type === 'category' ? 'Category' : 'Collection'}`}
+      >
+        <div className="space-y-4">
+            <div className="bg-red-50 text-red-800 p-4 rounded-md flex items-start gap-3">
+                <IconAlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                <div>
+                    <p className="font-medium">Are you sure?</p>
+                    <p className="text-sm mt-1">
+                        You are about to delete the {deleteTarget?.type} <strong>{deleteTarget?.name}</strong>.
+                        {deleteTarget?.type === 'category' && " This will also disable all associated collections and items."}
+                    </p>
+                </div>
+            </div>
+            
+            <div className="flex justify-end gap-3 mt-4">
+                <Button variant="outline" onClick={() => setDeleteConfirmOpen(false)} disabled={isDeleting}>Cancel</Button>
+                <Button 
+                    onClick={executeDelete} 
+                    disabled={isDeleting}
+                    isLoading={isDeleting}
+                    className="bg-red-600 hover:bg-red-700 text-white"
+                >
+                    Confirm Delete
+                </Button>
+            </div>
+        </div>
       </Modal>
     </div>
   );

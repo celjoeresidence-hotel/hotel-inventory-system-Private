@@ -197,7 +197,13 @@ export function useFrontDesk() {
 
         // Handle Housekeeping Reports
         if (d.type === 'housekeeping_report') {
-          housekeepingReports.push({ created_at: rec.created_at, data: { room_id: d.stay?.room_id as unknown as string, housekeeping_status: (d as unknown as { housekeeping_status?: string }).housekeeping_status } });
+          housekeepingReports.push({ 
+            created_at: rec.created_at, 
+            data: { 
+              room_id: (d.stay?.room_id || d.room_id) as unknown as string, 
+              housekeeping_status: (d as unknown as { housekeeping_status?: string }).housekeeping_status 
+            } 
+          });
         }
       });
 
@@ -257,7 +263,9 @@ export function useFrontDesk() {
             const hkStatus = String(latestHK.data.housekeeping_status || '').toLowerCase();
             if (hkStatus === 'dirty') {
                 housekeeping_status = 'dirty';
-            } else if (hkStatus === 'inspected' || hkStatus === 'cleaned') {
+            } else if (hkStatus === 'inspected') {
+                housekeeping_status = 'inspected';
+            } else if (hkStatus === 'cleaned') {
                 housekeeping_status = 'clean';
             }
         }
@@ -285,8 +293,10 @@ export function useFrontDesk() {
               status = 'cleaning';
             } else if (hkStatus === 'maintenance') {
               status = 'maintenance';
-            } else if (hkStatus === 'inspected' || hkStatus === 'cleaned') {
+            } else if (hkStatus === 'inspected') {
               status = 'available';
+            } else if (hkStatus === 'cleaned') {
+               status = 'pending';
             } else {
               status = 'pending';
             }

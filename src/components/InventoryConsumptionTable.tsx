@@ -9,6 +9,7 @@ import {
 } from './ui/Table';
 
 type UIItem = {
+  id: string;
   item_name: string;
   unit: string | null;
   unit_price: number | null;
@@ -24,6 +25,7 @@ interface Props {
   notesMap?: Record<string, string>;
   disabled?: boolean;
   soldLabel?: string;
+  errorItemId?: string | null;
   onChangeRestocked: (name: string, value: number) => void;
   onChangeSold: (name: string, value: number) => void;
   onChangeNotes?: (name: string, value: string) => void;
@@ -36,6 +38,7 @@ export default function InventoryConsumptionTable({
   notesMap,
   disabled = false,
   soldLabel = 'Sold',
+  errorItemId,
   onChangeRestocked,
   onChangeSold,
   onChangeNotes,
@@ -82,12 +85,25 @@ export default function InventoryConsumptionTable({
             
             // Highlight row if there is activity
             const hasActivity = r > 0 || s > 0 || n.length > 0;
-            const rowClass = hasActivity ? 'bg-green-50/50' : 'hover:bg-gray-50';
-            // We need to manually handle the sticky background because 'tr' background doesn't apply to sticky 'td' in some browsers/contexts properly if not explicit
-            const stickyBgClass = hasActivity ? 'bg-green-50' : 'bg-white group-hover:bg-gray-50';
+            const isError = errorItemId && row.id === errorItemId;
+            
+            let rowClass = 'hover:bg-gray-50';
+            let stickyBgClass = 'bg-white group-hover:bg-gray-50';
+
+            if (isError) {
+              rowClass = 'bg-red-50 hover:bg-red-100/50 border-l-4 border-l-red-500';
+              stickyBgClass = 'bg-red-50 group-hover:bg-red-100/50';
+            } else if (hasActivity) {
+              rowClass = 'bg-green-50/50';
+              stickyBgClass = 'bg-green-50';
+            }
 
             return (
-              <TableRow key={row.item_name} className={`transition-colors group ${rowClass}`}>
+              <TableRow 
+                key={row.item_name} 
+                className={`transition-colors group ${rowClass}`}
+                id={row.id ? `row-${row.id}` : undefined}
+              >
                 <TableCell className={`font-medium text-gray-900 sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] ${stickyBgClass}`}>
                   {row.item_name}
                 </TableCell>

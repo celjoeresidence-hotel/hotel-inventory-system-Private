@@ -14,7 +14,7 @@ interface InterruptedStaysTabProps {
 }
 
 export default function InterruptedStaysTab({ rooms, onRefresh }: InterruptedStaysTabProps) {
-  const { role, fullName, department } = useAuth();
+  const { role, fullName, department, ensureActiveSession } = useAuth();
   const [loading, setLoading] = useState(true);
   const [records, setRecords] = useState<any[]>([]);
   const [search, setSearch] = useState('');
@@ -144,6 +144,9 @@ export default function InterruptedStaysTab({ rooms, onRefresh }: InterruptedSta
     if (!noteTarget || !noteText.trim()) return;
     setActionLoading(noteTarget.id);
     try {
+      const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+      if (!ok) { alert('Session expired. Please sign in again.'); setActionLoading(null); return; }
+
       const { error } = await supabase!
         .from('operational_records')
         .insert({

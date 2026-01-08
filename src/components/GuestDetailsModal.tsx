@@ -508,6 +508,9 @@ export default function GuestDetailsModal({ isOpen, onClose, booking, rooms, onU
     if (!recordToDelete) return;
     try {
         setLoading(true);
+        const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
+        if (!ok) { alert('Session expired. Please sign in again.'); setLoading(false); return; }
+
         // Use the soft-delete RPC instead of hard delete
         const { error } = await supabase!
             .rpc('delete_record', { _id: recordToDelete.id });
