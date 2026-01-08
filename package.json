@@ -1,11 +1,10 @@
 {
-  "$schema": "https://json.schemastore.org/package.json",
   "name": "hotel-inventory-system",
   "productName": "Hotel Inventory System",
   "description": "Hotel Inventory Management System",
   "author": "Celjoe Residence Hotel",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -23,7 +22,7 @@
     "appId": "com.hotel.inventory",
     "productName": "Hotel Inventory System",
     "directories": {
-      "output": "release-installer-11"
+      "output": "release-unpacked-13"
     },
     "files": [
       "dist/**/*",

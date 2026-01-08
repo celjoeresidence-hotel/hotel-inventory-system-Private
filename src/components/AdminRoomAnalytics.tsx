@@ -40,13 +40,73 @@ export default function AdminRoomAnalytics() {
         return;
       }
 
-      const { data, error } = await supabase.rpc('get_room_analytics', {
-        _start_date: startDate,
-        _end_date: endDate
+      // Fetch Rooms
+      const { data: roomsData, error: roomsError } = await supabase
+        .from('rooms')
+        .select('id, room_number, room_type')
+        .eq('is_active', true);
+
+      if (roomsError) throw roomsError;
+
+      // Fetch Bookings (manually aggregated to avoid RPC enum issues)
+      const { data: bookingsData, error: bookingsError } = await supabase
+        .from('operational_records')
+        .select('data')
+        .eq('entity_type', 'front_desk')
+        .eq('status', 'approved')
+        .is('deleted_at', null)
+        .filter('data->stay->>check_in', 'gte', startDate)
+        .filter('data->stay->>check_in', 'lte', endDate);
+
+      if (bookingsError) throw bookingsError;
+
+      // Calculate days in period
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const daysInPeriod = Math.max(1, Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+
+      // Initialize stats map
+      const statsMap = new Map<string, RoomAnalytics>();
+      (roomsData || []).forEach((r: any) => {
+        statsMap.set(r.id, {
+          room_id: r.id,
+          room_number: r.room_number,
+          room_type: r.room_type,
+          booking_count: 0,
+          total_revenue: 0,
+          nights_sold: 0,
+          occupancy_rate: 0
+        });
       });
 
-      if (error) throw error;
-      setAnalytics(data || []);
+      // Aggregate bookings
+      (bookingsData || []).forEach((b: any) => {
+        const stay = b.data?.stay;
+        const pricing = b.data?.pricing;
+        if (stay?.room_id && statsMap.has(stay.room_id)) {
+          const stats = statsMap.get(stay.room_id)!;
+          
+          // Increment booking count
+          stats.booking_count++;
+          
+          // Add revenue
+          stats.total_revenue += Number(pricing?.total_room_cost || 0);
+          
+          // Calculate nights
+          const checkIn = new Date(stay.check_in);
+          const checkOut = new Date(stay.check_out);
+          const nights = Math.max(1, Math.round((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24)));
+          stats.nights_sold += nights;
+        }
+      });
+
+      // Finalize calculations (Occupancy Rate) and sort
+      const results = Array.from(statsMap.values()).map(stats => ({
+        ...stats,
+        occupancy_rate: Number(((stats.nights_sold / daysInPeriod) * 100).toFixed(2))
+      })).sort((a, b) => b.total_revenue - a.total_revenue);
+
+      setAnalytics(results);
     } catch (error: any) {
       console.error('Error fetching analytics:', error);
       toast.error(error.message || 'Failed to fetch analytics');

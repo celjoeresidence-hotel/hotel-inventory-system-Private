@@ -248,7 +248,6 @@ export default function FrontDeskOversight({ role }: FrontDeskOversightProps) {
             <FrontDeskAnalyticsView 
               checkoutRecords={checkoutRecords} 
               pastBookings={pastBookings}
-              totalRooms={rooms.length}
             />
           </div>
         )}

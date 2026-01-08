@@ -132,7 +132,8 @@ export default function ManagerFinancials() {
             const data: any = { 
                 item_name: l.item_name, 
                 quantity: Math.abs(l.quantity_change),
-                date: l.event_date 
+                date: l.event_date,
+                notes: l.notes
             };
 
             if (l.department === 'STORE') {

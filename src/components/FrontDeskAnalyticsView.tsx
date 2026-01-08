@@ -6,17 +6,16 @@ import { IconTrendingUp, IconTrendingDown, IconDollarSign, IconClock } from './u
 interface FrontDeskAnalyticsViewProps {
   checkoutRecords: BookingWithId[];
   pastBookings: BookingWithId[];
-  totalRooms: number;
 }
 
-export default function FrontDeskAnalyticsView({ checkoutRecords, pastBookings, totalRooms }: FrontDeskAnalyticsViewProps) {
+export default function FrontDeskAnalyticsView({ checkoutRecords, pastBookings }: FrontDeskAnalyticsViewProps) {
   const {
     dailyRevenue,
     monthlyRevenue,
     totalRevenue,
     averageStayDuration,
     totalCheckouts
-  } = useFrontDeskAnalytics(checkoutRecords, pastBookings, totalRooms);
+  } = useFrontDeskAnalytics(checkoutRecords, pastBookings);
 
   // Helper to format currency
   const formatMoney = (amount: number) => `₦${amount.toLocaleString()}`;

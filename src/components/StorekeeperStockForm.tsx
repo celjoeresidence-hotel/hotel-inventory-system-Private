@@ -177,7 +177,8 @@ export default function StorekeeperStockForm() {
       } finally { setLoadingCategories(false) }
     }
     fetchCategories()
-  }, [isConfigured, session])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConfigured, session, role])
 
   // Fetch collections for active category
   useEffect(() => {
@@ -201,6 +202,7 @@ export default function StorekeeperStockForm() {
       if (!selectedCollection && unique.length > 0) setSelectedCollection('')
     }
     fetchCollections()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConfigured, session, activeCategory])
 
   // Fetch items and compute opening stock per item

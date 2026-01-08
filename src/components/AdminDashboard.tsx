@@ -50,6 +50,16 @@ interface DashboardData {
   };
 }
 
+interface OperationalRecord {
+  id?: string;
+  entity_type?: string;
+  financial_amount?: number;
+  data?: any;
+  created_at?: string;
+  status?: string;
+  deleted_at?: string;
+}
+
 export default function AdminDashboard() {
   const { role, ensureActiveSession } = useAuth();
   const [data, setData] = useState<DashboardData | null>(null);
@@ -131,15 +141,19 @@ export default function AdminDashboard() {
   }
 
   useEffect(() => {
-    fetchDashboardData();
+    const controller = new AbortController();
+    fetchDashboardData(controller.signal);
+    return () => controller.abort();
   }, [dateRange]);
 
-  async function fetchDashboardData() {
+  async function fetchDashboardData(signal?: AbortSignal) {
     setLoading(true);
     setError(null);
     try {
       const client = supabase;
       if (!client) throw new Error('Supabase client not initialized');
+
+      const withSignal = (query: any) => signal ? query.abortSignal(signal) : query;
 
       // Parallel Fetching for "Intelligence Layers"
       const [
@@ -151,78 +165,83 @@ export default function AdminDashboard() {
         riskRes,
         interruptedRes,
         refundsRes,
-        resumedRes
+        resumedRes,
+        totalRoomsRes
       ] = await Promise.all([
         // 1. Financials (Approved records in date range)
-        client.from('operational_records')
+        withSignal(client.from('operational_records')
           .select('id, entity_type, financial_amount, data, created_at')
           .eq('status', 'approved')
           .is('deleted_at', null)
           .gte('created_at', dateRange.start)
-          .lte('created_at', dateRange.end + 'T23:59:59'),
+          .lte('created_at', dateRange.end + 'T23:59:59')),
         
         // 2. Pending Approvals (All time)
-        client.from('operational_records')
+        withSignal(client.from('operational_records')
           .select('id', { count: 'exact', head: true })
           .eq('status', 'pending')
-          .is('deleted_at', null),
+          .is('deleted_at', null)),
 
         // 3. Active Guests (Current)
-        client.from('operational_records')
+        withSignal(client.from('operational_records')
           .select('data')
           .eq('entity_type', 'front_desk')
           .eq('status', 'approved')
           .is('deleted_at', null)
-          .filter('data->>type', 'eq', 'room_booking'),
+          .filter('data->>type', 'eq', 'room_booking')),
 
         // 4. Rooms (Approved bookings in range)
-        client.from('operational_records')
+        withSignal(client.from('operational_records')
             .select('data, financial_amount')
             .eq('entity_type', 'front_desk')
             .eq('status', 'approved')
             .is('deleted_at', null)
             .filter('data->>type', 'eq', 'room_booking')
             .gte('created_at', dateRange.start)
-            .lte('created_at', dateRange.end + 'T23:59:59'),
+            .lte('created_at', dateRange.end + 'T23:59:59')),
 
         // 5. Ops (Stock outs & Adjustments)
-        client.from('operational_records')
+        withSignal(client.from('operational_records')
             .select('*')
             .in('entity_type', ['bar', 'kitchen', 'storekeeper'])
             .eq('status', 'approved')
             .is('deleted_at', null)
             .gte('created_at', dateRange.start)
-            .lte('created_at', dateRange.end + 'T23:59:59'),
+            .lte('created_at', dateRange.end + 'T23:59:59')),
 
         // 6. Risk (Rejected & Cancelled)
-        client.from('operational_records')
+        withSignal(client.from('operational_records')
           .select('*')
           .or('status.eq.rejected,deleted_at.not.is.null')
           .gte('created_at', dateRange.start)
-          .lte('created_at', dateRange.end + 'T23:59:59')
-        ,
+          .lte('created_at', dateRange.end + 'T23:59:59')),
+
         // 7. Interrupted Stays Credits
-        client.from('operational_records')
+        withSignal(client.from('operational_records')
           .select('id, data')
           .eq('entity_type', 'front_desk')
           .is('deleted_at', null)
-          .filter('data->>type', 'eq', 'interrupted_stay_credit'),
+          .filter('data->>type', 'eq', 'interrupted_stay_credit')),
         // 8. Refunds from credits
-        client.from('operational_records')
+        withSignal(client.from('operational_records')
           .select('id, data, financial_amount, created_at')
           .eq('entity_type', 'front_desk')
           .is('deleted_at', null)
           .filter('data->>type', 'eq', 'refund_record')
           .gte('created_at', dateRange.start)
-          .lte('created_at', dateRange.end + 'T23:59:59'),
+          .lte('created_at', dateRange.end + 'T23:59:59')),
         // 9. Resumed bookings marked
-        client.from('operational_records')
+        withSignal(client.from('operational_records')
           .select('id, data, created_at')
           .eq('entity_type', 'front_desk')
           .is('deleted_at', null)
           .filter('data->>type', 'eq', 'room_booking')
           .gte('created_at', dateRange.start)
-          .lte('created_at', dateRange.end + 'T23:59:59')
+          .lte('created_at', dateRange.end + 'T23:59:59')),
+        // 10. Total Rooms (Occupancy Rate)
+        withSignal(client.from('rooms')
+          .select('id', { count: 'exact', head: true })
+          .eq('is_active', true))
       ]);
 
       if (revenueRes.error) throw revenueRes.error;
@@ -232,7 +251,7 @@ export default function AdminDashboard() {
       let totalExpense = 0; // Placeholder if we find expenses
       const revenueByDept: Record<string, number> = {};
       
-      revenueRes.data?.forEach(r => {
+      revenueRes.data?.forEach((r: OperationalRecord) => {
         const amt = Number(r.financial_amount || 0);
         if (amt > 0) {
             totalRevenue += amt;
@@ -248,7 +267,7 @@ export default function AdminDashboard() {
       const activeGuests = new Set();
       let occupiedRooms = 0;
       
-      activeGuestRes.data?.forEach(r => {
+      activeGuestRes.data?.forEach((r: OperationalRecord) => {
         const stay = r.data?.stay;
         if (stay && stay.check_in <= today && stay.check_out > today) {
             if (r.data.guest?.id) activeGuests.add(r.data.guest.id);
@@ -257,12 +276,12 @@ export default function AdminDashboard() {
       });
 
       // Occupancy Rate (Need total rooms)
-      const { count: totalRooms } = await client.from('rooms').select('id', { count: 'exact', head: true }).eq('is_active', true);
+      const totalRooms = totalRoomsRes.count || 0;
       const occupancyRate = totalRooms ? Math.round((occupiedRooms / totalRooms) * 100) : 0;
 
       // --- Process Rooms ---
       const roomStats: Record<string, { revenue: number, bookings: number }> = {};
-      roomsRes.data?.forEach(r => {
+      roomsRes.data?.forEach((r: OperationalRecord) => {
           const roomId = r.data?.stay?.room_id;
           if (roomId) {
               if (!roomStats[roomId]) roomStats[roomId] = { revenue: 0, bookings: 0 };
@@ -289,12 +308,12 @@ export default function AdminDashboard() {
       }
 
       // --- Process Ops ---
-      const anomalies = opsRes.data?.filter(r => (r.data?.type || '').includes('adjustment')) || [];
-      const shrinkage = opsRes.data?.filter(r => r.data?.type === 'stock_out' && ['waste', 'expired', 'damaged'].includes(r.data?.reason)) || [];
+      const anomalies = opsRes.data?.filter((r: OperationalRecord) => (r.data?.type || '').includes('adjustment')) || [];
+      const shrinkage = opsRes.data?.filter((r: OperationalRecord) => r.data?.type === 'stock_out' && ['waste', 'expired', 'damaged'].includes(r.data?.reason)) || [];
 
       // --- Process Risk ---
-      const rejected = riskRes.data?.filter(r => r.status === 'rejected') || [];
-      const cancelled = riskRes.data?.filter(r => r.deleted_at !== null) || [];
+      const rejected = riskRes.data?.filter((r: OperationalRecord) => r.status === 'rejected') || [];
+      const cancelled = riskRes.data?.filter((r: OperationalRecord) => r.deleted_at !== null) || [];
 
       const pendingInterrupted = (interruptedRes.data || []).filter((r: any) => Boolean(r.data?.can_resume));
       const totalPausedCredit = (interruptedRes.data || []).reduce((sum: number, r: any) => sum + Number(r.data?.credit_remaining || 0), 0);
@@ -334,10 +353,13 @@ export default function AdminDashboard() {
       });
 
     } catch (err: any) {
+      if (err.name === 'AbortError' || signal?.aborted) return;
       console.error(err);
       setError(err.message);
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
   }
 

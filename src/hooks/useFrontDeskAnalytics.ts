@@ -23,8 +23,7 @@ export interface FrontDeskAnalytics {
 
 export function useFrontDeskAnalytics(
   checkoutRecords: BookingWithId[],
-  pastBookings: BookingWithId[],
-  totalRooms: number
+  pastBookings: BookingWithId[]
 ): FrontDeskAnalytics {
   return useMemo(() => {
     const dailyMap = new Map<string, { revenue: number; count: number }>();
@@ -99,5 +98,5 @@ export function useFrontDeskAnalytics(
       occupancyRate: 0, // Placeholder, calculate in component
       totalCheckouts: checkoutRecords.length
     };
-  }, [checkoutRecords, pastBookings, totalRooms]);
+  }, [checkoutRecords, pastBookings]);
 }
