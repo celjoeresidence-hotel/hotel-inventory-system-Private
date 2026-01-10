@@ -110,12 +110,17 @@ export default function CheckOutModal({ isOpen, onClose, booking, roomStatus, on
       
       // Ensure public.profile exists for this user to satisfy FK constraint
       if (session?.user) {
-        await supabase.from('profiles').upsert({
-            id: session.user.id,
-            email: session.user.email,
-            full_name: session.user.user_metadata?.full_name || session.user.email,
-            role: 'front_desk'
-        }, { onConflict: 'id', ignoreDuplicates: true });
+        // Use select to check if profile exists to avoid RLS issues with upsert if policy is strict
+        const { data: existingProfile } = await supabase.from('profiles').select('id').eq('id', session.user.id).single();
+        
+        if (!existingProfile) {
+            await supabase.from('profiles').insert({
+                id: session.user.id,
+                email: session.user.email,
+                full_name: session.user.user_metadata?.full_name || session.user.email,
+                role: 'front_desk'
+            });
+        }
       }
 
       // 1. Insert Checkout Record
