@@ -255,6 +255,19 @@ export default function InventoryStructureTab({ onStructureChange }: InventorySt
             return;
         }
 
+        // Check if active category exists
+        const { data: existing } = await supabase
+            .from('inventory_categories')
+            .select('id')
+            .eq('name', newCategoryName.trim())
+            .single();
+
+        if (existing) {
+            setError(`Category "${newCategoryName.trim()}" already exists.`);
+            setSavingCategory(false);
+            return;
+        }
+
         const { error } = await supabase
             .from('inventory_categories')
             .insert({ 
@@ -263,7 +276,30 @@ export default function InventoryStructureTab({ onStructureChange }: InventorySt
                 assigned_to: assigned 
             });
 
-        if (error) throw error;
+        if (error) {
+            // Check for unique constraint violation (likely a soft-deleted record)
+            if (error.code === '23505') { // unique_violation
+                // Try to restore the deleted record
+                const { data: restored, error: restoreError } = await supabase
+                    .from('inventory_categories')
+                    .update({ 
+                        deleted_at: null,
+                        is_active: true,
+                        assigned_to: assigned,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq('name', newCategoryName.trim())
+                    .select();
+                
+                if (restoreError) throw restoreError;
+
+                if (!restored || restored.length === 0) {
+                     throw new Error(`Category "${newCategoryName.trim()}" exists (possibly deleted) but could not be restored. You may not have permission to modify it.`);
+                }
+            } else {
+                throw error;
+            }
+        }
 
         setNewCategoryName('');
         setNewCategoryAssignedKitchen(false);
@@ -295,6 +331,21 @@ export default function InventoryStructureTab({ onStructureChange }: InventorySt
         const category = categories.find(c => c.name === selectedCategoryName);
         if (!category) throw new Error("Category not found");
 
+        // Check if active collection exists
+        const { data: existing } = await supabase
+            .from('inventory_collections')
+            .select('id')
+            .eq('name', newCollectionName.trim())
+            .eq('category_id', category.id)
+            .is('deleted_at', null)
+            .maybeSingle();
+
+        if (existing) {
+            setError(`Collection "${newCollectionName.trim()}" already exists in this category.`);
+            setSavingCollection(false);
+            return;
+        }
+
         const { error } = await supabase
             .from('inventory_collections')
             .insert({ 
@@ -303,7 +354,30 @@ export default function InventoryStructureTab({ onStructureChange }: InventorySt
                 is_active: true 
             });
 
-        if (error) throw error;
+        if (error) {
+             // Check for unique constraint violation (likely a soft-deleted record)
+             if (error.code === '23505') { // unique_violation
+                 // Try to restore the deleted record
+                 const { data: restored, error: restoreError } = await supabase
+                     .from('inventory_collections')
+                     .update({ 
+                         deleted_at: null,
+                         is_active: true,
+                         updated_at: new Date().toISOString()
+                     })
+                     .eq('name', newCollectionName.trim())
+                     .eq('category_id', category.id)
+                     .select();
+                 
+                 if (restoreError) throw restoreError;
+
+                 if (!restored || restored.length === 0) {
+                     throw new Error(`Collection "${newCollectionName.trim()}" exists (possibly deleted) but could not be restored. You may not have permission to modify it.`);
+                 }
+             } else {
+                 throw error;
+             }
+        }
 
         setNewCollectionName('');
         setAddCollectionOpen(false);

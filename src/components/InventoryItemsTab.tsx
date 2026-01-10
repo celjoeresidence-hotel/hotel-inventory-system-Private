@@ -53,7 +53,7 @@ interface ItemRow {
 export default function InventoryItemsTab() {
   const { session, isConfigured, isSupervisor, isManager, isAdmin, role, ensureActiveSession } = useAuth();
   const canView = useMemo(() => Boolean(isConfigured && session && (isSupervisor || isManager || isAdmin)), [isConfigured, session, isSupervisor, isManager, isAdmin]);
-  const canEditItemMeta = useMemo(() => Boolean(isManager || isAdmin), [isManager, isAdmin]);
+  const canEditItemMeta = useMemo(() => Boolean(isSupervisor || isManager || isAdmin), [isSupervisor, isManager, isAdmin]);
   const canAdjustStock = useMemo(() => Boolean(isSupervisor || isManager || isAdmin || role === 'storekeeper'), [isSupervisor, isManager, isAdmin, role]);
   const canDeleteItem = useMemo(() => Boolean(isManager || isAdmin), [isManager, isAdmin]);
 
@@ -313,8 +313,23 @@ export default function InventoryItemsTab() {
             return;
         }
 
+        // Check if active item exists
+        const { data: existingItem } = await supabase
+            .from('inventory_items')
+            .select('id')
+            .eq('item_name', addItemName.trim())
+            .is('deleted_at', null)
+            .maybeSingle();
+
+        if (existingItem) {
+            setError(`Item "${addItemName.trim()}" already exists.`);
+            setSavingItem(false);
+            return;
+        }
+
         // Phase 2: Write to inventory_items
-        const { data: newItem, error: itemErr } = await supabase
+        let newItem = null;
+        const { data: createdItem, error: itemErr } = await supabase
             .from('inventory_items')
             .insert({
                 item_name: addItemName.trim(),
@@ -328,8 +343,37 @@ export default function InventoryItemsTab() {
             .single();
 
         if (itemErr) {
-            setError(itemErr.message);
-            return;
+            // Check for unique constraint violation (likely a soft-deleted record)
+             if (itemErr.code === '23505') { // unique_violation
+                  // Try to restore the deleted record
+                  const { data: restoredItem, error: restoreError } = await supabase
+                      .from('inventory_items')
+                      .update({ 
+                          deleted_at: null,
+                          active: true,
+                          category: filterCategoryName,
+                          collection: filterCollection,
+                          unit: addItemUnit.trim(),
+                          unit_price: parseFloat(addItemUnitPrice) || 0,
+                          updated_at: new Date().toISOString()
+                      })
+                      .eq('item_name', addItemName.trim())
+                      .select()
+                      .single();
+                  
+                  if (restoreError) {
+                     // If 0 rows updated, .single() throws. We catch it here or let it fall through.
+                     // But explicit check is better if we didn't use .single()
+                     setError(restoreError.message);
+                     return;
+                  }
+                  newItem = restoredItem;
+             } else {
+                setError(itemErr.message);
+                return;
+            }
+        } else {
+            newItem = createdItem;
         }
 
         // Add opening stock if provided
