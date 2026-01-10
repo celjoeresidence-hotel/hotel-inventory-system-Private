@@ -22,7 +22,7 @@ interface CheckOutModalProps {
 }
 
 export default function CheckOutModal({ isOpen, onClose, booking, roomStatus, onSuccess }: CheckOutModalProps) {
-  const { staffId, ensureActiveSession } = useAuth();
+  const { staffId, ensureActiveSession, session } = useAuth();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
@@ -108,6 +108,16 @@ export default function CheckOutModal({ isOpen, onClose, booking, roomStatus, on
       const ok = await (ensureActiveSession?.() ?? Promise.resolve(true));
       if (!ok) { setError('Session expired. Please sign in again to continue.'); return; }
       
+      // Ensure public.profile exists for this user to satisfy FK constraint
+      if (session?.user) {
+        await supabase.from('profiles').upsert({
+            id: session.user.id,
+            email: session.user.email,
+            full_name: session.user.user_metadata?.full_name || session.user.email,
+            role: 'front_desk'
+        }, { onConflict: 'id', ignoreDuplicates: true });
+      }
+
       // 1. Insert Checkout Record
       const { error: insertError } = await supabase!
         .from('operational_records')
@@ -115,7 +125,7 @@ export default function CheckOutModal({ isOpen, onClose, booking, roomStatus, on
           entity_type: 'front_desk',
           data: checkoutPayload,
           financial_amount: Math.max(0, ledgerSummary.balance), // Ensure non-negative to satisfy DB constraint
-          submitted_by: staffId, 
+          submitted_by: session?.user?.id || staffId, 
           status: 'approved' // Migration 0013 allows this
         });
 
@@ -164,7 +174,7 @@ export default function CheckOutModal({ isOpen, onClose, booking, roomStatus, on
             reason: notes || 'Emergency / Interrupted Stay'
           },
           financial_amount: 0,
-          submitted_by: staffId,
+          submitted_by: session?.user?.id || staffId,
           status: 'approved'
         });
 
@@ -186,7 +196,7 @@ export default function CheckOutModal({ isOpen, onClose, booking, roomStatus, on
             booking_id: booking.id
           },
           financial_amount: 0,
-          submitted_by: staffId,
+          submitted_by: session?.user?.id || staffId,
           status: 'approved'
         });
       }
